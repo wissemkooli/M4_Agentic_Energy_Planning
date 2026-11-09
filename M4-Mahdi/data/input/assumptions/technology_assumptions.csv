@@ -1,0 +1,5 @@
+technology,category,is_renewable,capex_musd_per_mw,fixed_om_musd_per_mw_yr,variable_cost_usd_per_mwh,emission_factor_t_per_mwh,lifetime_years,availability_factor,capacity_credit,max_annual_build_mw,max_total_new_mw,data_status,source_note
+gas,dispatchable,false,0.90,0.020,75.7,0.457,30,0.943,0.90,600,6000,mock,"MOCK. Variable cost (fuel+VOM) and emission factor = mean of legacy mock gas rows; availability = 3300/3500 from mock reference 2024; capex/FOM/lifetime are illustrative mock assumptions"
+solar,variable,true,0.75,0.015,0.0,0.0,25,1.0,0.10,400,12000,mock,"MOCK illustrative assumptions. Direct (operational) emissions = 0; legacy mock lifecycle-like factor (0.02-0.03) not used. Availability is embedded in the monthly net capacity factor profile"
+wind,variable,true,1.30,0.035,0.0,0.0,25,1.0,0.15,200,6000,mock,"MOCK illustrative assumptions. Direct emissions = 0. Availability embedded in monthly net capacity factor profile"
+hydro,energy_limited,true,2.50,0.030,5.0,0.0,50,1.0,0.50,10,30,mock,"MOCK illustrative assumptions. Expansion potential assumed very small (water-resource limited)"

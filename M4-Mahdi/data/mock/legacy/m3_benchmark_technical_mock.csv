@@ -1,0 +1,9 @@
+country,technology,cost_per_mwh,co2_t_per_mwh,capacity_factor
+Country_A,solar,35,0.02,0.22
+Country_A,wind,48,0.01,0.38
+Country_A,gas,75,0.45,0.55
+Country_B,solar,40,0.03,0.25
+Country_B,wind,45,0.02,0.42
+Country_B,gas,82,0.48,0.60
+Country_C,hydro,55,0.01,0.50
+Country_C,gas,70,0.44,0.58

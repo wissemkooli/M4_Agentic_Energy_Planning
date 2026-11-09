@@ -1,0 +1,184 @@
+# M4 — Agentic Energy Planning and Optimization System for Tunisia
+# Architecture description kept consistent with the implemented code (paths are relative to the repository root).
+# A copy of this file is placed in M4-Mahdi/ when the backend-only ZIP is packaged.
+
+project:
+  name: M4 Agentic Energy Planning
+  module: M4 (depends on M1 demand forecasting and M3 international benchmarking outputs)
+  principle: "The LLM reasons and orchestrates. Python simulates. The optimizer calculates. The human decides."
+  reference_year: 2024
+  default_horizon: [2025, 2040]          # configurable 1..36 years
+  data_status: MOCK                      # all current inputs are synthetic/fictional
+
+applications:
+  backend:
+    path: M4-Mahdi/
+    package: m4
+    entrypoint: "M4-Mahdi/main.py  ->  python -m uvicorn main:app --reload --port 8000"
+    language: Python 3.12 (3.11-3.13 supported)
+    frameworks: [FastAPI, Pydantic v2, SQLAlchemy 2, Pyomo, HiGHS (highspy), LangGraph, pandas, NumPy]
+    independent_of_frontend: true
+  frontend:
+    path: frontend/
+    entrypoint: "npm run dev  ->  http://localhost:5173 (proxy /api -> http://127.0.0.1:8000)"
+    stack: [React 18, TypeScript, Vite 5, Tailwind CSS 3, React Router 6, Recharts 2, Axios]
+    business_logic: none (displays backend data only)
+    replaceable: true
+
+components:
+  data_integration:
+    path: M4-Mahdi/m4/data_integration
+    responsibility: load, validate, normalize inputs; detect MOCK/REAL; provenance; data quality report
+    modules:
+      load_data.py: raw CSV/YAML reading
+      validate_data.py: schema, numeric, positivity, duplicates, capacity consistency, capacity factor bounds
+      prepare_data.py: technology normalization, unavailable capacity, totals, observed capacity factors
+      prepare_demand.py: "average_demand_mw = forecast_gwh * 1000 / (days_in_month * 24)"
+      adapters.py: [M1InputAdapter, M3InputAdapter, ReferenceSystemAdapter, TechnologyAssumptionsAdapter]
+      repository.py: InputBundle loading + file-modification cache
+      quality.py: cross-dataset checks (coverage, missing technologies, 2024 reconciliation, CF calibration)
+      provenance.py: DataStatus (MOCK, REAL, MIXED, UNKNOWN), DatasetProvenance (version, sha256, transformations)
+  scenarios:
+    path: M4-Mahdi/m4/scenarios
+    responsibility: ScenarioConfig schema (horizon, demand, constraints, operating assumptions, objective) and predefined scenarios
+    predefined: [reference, energy_efficiency, accelerated_renewables, balanced_transition, stress]
+  modeling:
+    path: M4-Mahdi/m4/modeling
+    responsibility: demand pathway (M1 + labelled extrapolation), solver-independent SystemInputs, merit-order simulation, shared indicators
+    time_resolution: {balance: monthly, investment: annual, reporting: annual + milestones}
+  optimization:
+    path: M4-Mahdi/m4/optimization
+    responsibility: Pyomo LP, HiGHS solve, multi-objective methods, validation, infeasibility diagnosis, formulation text
+    solver: appsi_highs (fallback highs)
+    decision_variables: ["new[t,y] MW", "gen[t,y,m] GWh", "imp[y,m] GWh"]
+    constraints: [energy_balance, available_output, vre_integration_limit, import_limit, reserve_margin,
+                  build_limits, total_budget, annual_budget, renewable_targets, gas_share_limits, co2_caps, min_build]
+    objectives: [min_cost, min_emissions, min_dependence, max_renewables, min_investment]
+    methods: [single, weighted_sum, epsilon_constraint, lexicographic, pareto_frontier]
+    validation: [physical_checks, objective_consistency, constraint_report, merit_order_adequacy_recheck]
+    infeasibility: elastic reformulation (weighted slacks on policy constraints)
+    extensions_not_implemented: [storage, construction_lead_times, endogenous_retirement, hourly_dispatch, network]
+  strategy:
+    path: M4-Mahdi/m4/strategy
+    responsibility: alternative strategies from distinct formulations, duplicate detection, roadmap, milestones, trade-offs, risks
+    alternatives:
+      cost_conscious: single min_cost
+      max_decarbonization: lexicographic [min_emissions, min_cost]
+      balanced: epsilon_constraint min_cost with CO2 at midpoint
+      energy_security: lexicographic [min_dependence, min_cost]   # when dependence is an objective
+      max_renewables: lexicographic [max_renewables, min_cost]   # when renewables are an objective
+  agent:
+    path: M4-Mahdi/m4/agent
+    framework: LangGraph (StateGraph, state persisted in planning_requests.state)
+    llm: optional OpenAI-compatible provider (OpenRouter by default) configured in backend .env
+    llm_roles: [intent_extraction (numbers must appear in user text), investigation_tool_selection (read-only tools), explanation_rephrasing (grounding check)]
+    deterministic_fallback: rule-based intent parser + default investigation plan + template explanations
+    nodes: [route, understand_request, check_completeness, investigate_data, ask_clarification, build_scenario,
+            formulate_problem, simulate_baseline, optimize_strategies, validate_results, analyze_tradeoffs, explain_strategies]
+    tools:
+      investigation: [get_reference_energy_system, get_demand_forecast, get_international_benchmark,
+                      get_technology_assumptions, check_data_quality, simulate_existing_fleet, estimate_unconstrained_investment]
+      after_approval_only: [formulate_optimization_problem, run_optimization (via generate_strategies), compare_scenarios, explain_strategy]
+  services:
+    path: M4-Mahdi/m4/services.py
+    responsibility: orchestration between API, engine and persistence; strategy versioning; admin decisions
+  persistence:
+    path: M4-Mahdi/m4/db
+    default: "sqlite:///./data/m4.db"
+    optional: PostgreSQL via DATABASE_URL (psycopg) — not tested
+    tables: [users, refresh_tokens, scenarios, optimization_runs, planning_requests, strategies, strategy_decisions]
+    initialisation: M4-Mahdi/scripts/init_db.py (create_all + predefined scenarios)
+  auth:
+    path: M4-Mahdi/m4/auth
+    password_hashing: Argon2id
+    tokens: {access: "JWT HS256, 30 min", refresh: "opaque, hashed in DB, rotated (30 s grace), revoked on logout, httpOnly cookie"}
+    roles: [USER, ADMIN]
+    enforcement: backend dependencies (get_current_user, require_admin); frontend guards are cosmetic
+
+data_inputs:
+  manifest: M4-Mahdi/data/input/sources.yml
+  m1_demand_forecast: {file: m1/m1_forecast_synthetic.csv, status: MOCK, schema: [month, actual_gwh, forecast_gwh, lower_80, upper_80, lower_95, upper_95, model, horizon, fold, run_id, status]}
+  m3_benchmark: {file: m3/m3_benchmark_synthetic.csv, status: MOCK, use: context only (not costs or capacity factors)}
+  reference_2024: {file: reference_2024/reference_capacity_2024.csv, status: MOCK}
+  technology_assumptions: {files: [assumptions/technology_assumptions.csv, assumptions/capacity_factor_profiles.csv, assumptions/capacity_retirements.csv, assumptions/system_parameters.yml], status: MOCK}
+  real_data_switch: edit sources.yml (path, data_status, dataset_version); adapters only change if schemas differ
+
+data_flow:
+  - "input files -> adapters -> InputBundle (with provenance)"
+  - "InputBundle + ScenarioConfig -> build_system_inputs -> SystemInputs"
+  - "SystemInputs -> simulate (merit order) | run_optimization (Pyomo/HiGHS)"
+  - "results -> validation -> OptimizationRun (stored with scenario snapshot and provenance)"
+  - "agent: request -> intent -> investigation -> clarification -> scenario -> formulation -> [user approval] -> simulation -> strategies -> validation -> trade-offs -> explanation -> [admin decision]"
+  - "React -> FastAPI -> services/agent -> engine -> database -> FastAPI -> React"
+
+human_approval_points:
+  - {gate: clarification, actor: requester, rule: "missing numeric values (e.g. 'limited budget') are asked, never assumed"}
+  - {gate: formulation_approval, actor: requester or admin, endpoint: "POST /api/agent/requests/{id}/approve", rule: "optimization starts only after approval"}
+  - {gate: strategy_decision, actor: ADMIN, endpoints: ["POST /api/admin/strategies/{id}/approve", "/reject (reason required)", "/request-revision"], rule: "approved strategy = planning reference; decisions append-only"}
+
+api:
+  base: /api
+  docs: [/docs, /redoc, /openapi.json, M4-Mahdi/docs/openapi.json, M4-Mahdi/docs/API.md]
+  groups:
+    public:
+      - "GET /health"
+      - "POST /auth/login"
+      - "POST /auth/refresh"
+      - "POST /auth/logout"
+    user:
+      - "GET /auth/me"
+      - "GET /dashboard"
+      - "GET /energy/reference"
+      - "GET /forecast"
+      - "GET /benchmark"
+      - "GET /data/sources"
+      - "GET|POST /scenarios"
+      - "POST /scenarios/validate"
+      - "GET /scenarios/meta"
+      - "GET|DELETE /scenarios/{id}"
+      - "POST /optimization/run"
+      - "POST /simulation/run"
+      - "POST /optimization/pareto"
+      - "GET /optimization"
+      - "GET /optimization/{id}"
+      - "POST /comparison"
+      - "GET /agent/info"
+      - "GET|POST /agent/requests"
+      - "GET /agent/requests/{id}"
+      - "GET /agent/requests/{id}/investigation"
+      - "POST /agent/requests/{id}/message"
+      - "POST /agent/requests/{id}/approve"
+      - "GET /strategies"
+      - "GET /strategies/reference"
+      - "GET /strategies/{id}"
+      - "GET /history"
+    admin:
+      - "GET /admin/overview"
+      - "GET /admin/review-queue"
+      - "POST /admin/strategies/{id}/approve"
+      - "POST /admin/strategies/{id}/reject"
+      - "POST /admin/strategies/{id}/request-revision"
+      - "GET /admin/decisions"
+      - "GET|POST /admin/users"
+      - "PATCH /admin/users/{id}"
+
+frontend_pages:
+  public: [/login]
+  user: [/dashboard, /agent, "/agent/:requestId", /scenarios, /runs, "/runs/:runId", /strategies, "/strategies/:strategyId", /compare, /history, /data, /access-denied]
+  admin: [/admin, /admin/review, /admin/decisions, /admin/users]
+
+configuration:
+  backend_env: M4-Mahdi/.env (template M4-Mahdi/.env.example)
+  frontend_env: frontend/.env (template frontend/.env.example)
+  required_in_production: [JWT_SECRET_KEY, APP_ENV=production, CORS_ORIGINS, REFRESH_COOKIE_SECURE=true behind HTTPS]
+  optional: [LLM_API_KEY, LLM_MODEL, LLM_BASE_URL, DATABASE_URL, DATA_SOURCES_FILE, SOLVER_NAME]
+  secrets_policy: ".env files are git-ignored; the LLM key never reaches the browser"
+
+testing:
+  backend: "M4-Mahdi/tests (pytest): data, adapters, modeling, optimization, scenarios/strategies, agent, API/security"
+  frontend: "frontend/src/test (Vitest + Testing Library): form validation, guards, loading/error/empty states"
+  scripts: [scripts/run-tests.ps1]
+
+setup_scripts:
+  windows: [scripts/setup.ps1, scripts/start-dev.ps1, scripts/start-backend.ps1, scripts/start-frontend.ps1, scripts/run-tests.ps1]
+  unix: [scripts/setup.sh]

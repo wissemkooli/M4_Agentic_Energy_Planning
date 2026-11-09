@@ -1,0 +1,5 @@
+technology,installed_capacity_mw,avg_available_capacity_mw,generation_gwh,data_status
+gas,3500,3300,16000,mock
+solar,500,480,900,mock
+wind,250,240,700,mock
+hydro,100,90,250,mock

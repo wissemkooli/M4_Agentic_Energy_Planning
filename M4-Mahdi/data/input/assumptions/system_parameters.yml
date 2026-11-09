@@ -1,0 +1,43 @@
+# MOCK system-level assumptions used by the M4 simulation and optimization engines.
+# None of these values are official Tunisian statistics. Replace them with documented
+# values (and set data_status: real) once sources are available.
+data_status: mock
+dataset_version: mock-assumptions-1.0
+currency: "USD (constant 2024)"
+parameters:
+  discount_rate:
+    value: 0.08
+    unit: "fraction per year"
+    note: "Used for capital annualization (CRF) and NPV discounting to 2024"
+  peak_to_average_ratio:
+    value: 1.20
+    unit: "ratio"
+    note: "Peak demand (MW) = highest monthly average demand (MW) x ratio. Proxy because only monthly energy is available"
+  default_reserve_margin:
+    value: 0.15
+    unit: "fraction of peak demand"
+    note: "Firm capacity (capacity_credit x installed) must exceed (1 + margin) x peak demand"
+  network_loss_factor:
+    value: 0.0
+    unit: "fraction of demand"
+    note: "Supply requirement = demand x (1 + factor). 0 assumes M1 demand already measures required supply; confirm the M1 demand definition with the M1 owner"
+  import_cost_usd_per_mwh:
+    value: 90.0
+    unit: "USD/MWh"
+    note: "Illustrative cost of electricity imports through interconnections"
+  import_emission_factor_t_per_mwh:
+    value: 0.0
+    unit: "tCO2/MWh"
+    note: "Accounting scope = domestic production emissions. Imported electricity emissions are not attributed to Tunisia"
+  default_max_import_share:
+    value: 0.10
+    unit: "fraction of annual supply"
+    note: "Interconnection usage limit"
+  gas_import_fraction:
+    value: 1.0
+    unit: "fraction"
+    note: "Share of gas-fired generation counted as externally dependent supply in the energy dependence index (1.0 = conservative upper bound)"
+  max_variable_renewable_share_monthly:
+    value: 0.55
+    unit: "fraction of monthly supply"
+    note: "Proxy for intra-day flexibility limits (storage and hourly dispatch are not modelled at monthly resolution)"

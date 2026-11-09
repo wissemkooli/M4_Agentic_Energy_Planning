@@ -1,0 +1,32 @@
+# M4 input source manifest.
+# Each entry declares where an input lives (path relative to M4-Mahdi/data/input/)
+# and whether it is MOCK (synthetic / fictional) or REAL (produced by the team pipeline
+# or official sources). To switch to real data, change `path`, `data_status` and
+# `dataset_version` here; no code change is required if the schema matches.
+m1_demand_forecast:
+  path: m1/m1_forecast_synthetic.csv
+  data_status: MOCK
+  dataset_version: synthetic-m1-v1.0
+  producer: "scripts/generate_synthetic_data.py (trend x seasonality projection, NOT XGBoost)"
+  description: "Synthetic monthly electricity demand forecasts simulating the M1 output schema"
+m3_benchmark:
+  path: m3/m3_benchmark_synthetic.csv
+  data_status: MOCK
+  dataset_version: SYNTHETIC-M3-2026.11
+  producer: "scripts/generate_synthetic_data.py (fictional comparator countries)"
+  description: "Synthetic international benchmarking indicators simulating the M3 output schema"
+reference_2024:
+  path: reference_2024/reference_capacity_2024.csv
+  data_status: MOCK
+  dataset_version: mock-reference-2024-v1
+  producer: "M4 prototype mock file"
+  description: "Fictional 2024 reference electricity system (installed/available capacity, generation)"
+technology_assumptions:
+  path: assumptions/technology_assumptions.csv
+  profiles_path: assumptions/capacity_factor_profiles.csv
+  retirements_path: assumptions/capacity_retirements.csv
+  system_parameters_path: assumptions/system_parameters.yml
+  data_status: MOCK
+  dataset_version: mock-assumptions-1.0
+  producer: "M4 documented mock technical assumptions (independent of M3)"
+  description: "Technology costs, emission factors, capacity factors, lifetimes and system parameters"

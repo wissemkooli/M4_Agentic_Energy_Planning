@@ -1,0 +1,55 @@
+dataset_version,model_version,country,indicator,unit,window_start,window_end,mean_window,median_window,trend_per_year,trend_pct_per_year,rank_high_to_low,n_countries,diff_vs_tun,distance_to_tun,n_years,coverage
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Tunisia,renewable_share_electricity,%,2015,2023,6.192,6.447,0.4986,8.054,4,9,0.0,0.0,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator A,renewable_share_electricity,%,2015,2023,5.024,5.63,1.0182,20.268,5,9,-1.168,1.168,7,0.778
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator B,renewable_share_electricity,%,2015,2023,25.084,24.866,2.0498,8.172,1,9,18.892,18.892,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator C,renewable_share_electricity,%,2015,2023,4.771,4.691,1.4155,29.67,6,9,-1.421,1.421,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator D,renewable_share_electricity,%,2015,2023,1.435,0.576,0.5798,40.391,8,9,-4.756,4.756,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator E,renewable_share_electricity,%,2015,2023,9.185,9.16,0.1677,1.825,3,9,2.994,2.994,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator F,renewable_share_electricity,%,2015,2023,15.979,15.991,1.9383,12.13,2,9,9.787,9.787,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator G,renewable_share_electricity,%,2015,2023,0.0,0.0,0.0,,9,9,-6.192,6.192,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator H,renewable_share_electricity,%,2015,2023,1.815,0.259,0.8045,44.333,7,9,-4.377,4.377,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Tunisia,gas_share_electricity,%,2015,2023,90.175,90.679,-0.5057,-0.561,7,9,0.0,0.0,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator A,gas_share_electricity,%,2015,2023,90.32,91.432,-1.9181,-2.124,6,9,0.144,0.144,8,0.889
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator B,gas_share_electricity,%,2015,2023,93.502,93.747,-0.4453,-0.476,5,9,3.327,3.327,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator C,gas_share_electricity,%,2015,2023,61.472,61.057,-2.0287,-3.3,9,9,-28.703,28.703,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator D,gas_share_electricity,%,2015,2023,100.0,100.0,-0.0,-0.0,1,9,9.825,9.825,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator E,gas_share_electricity,%,2015,2023,88.741,89.49,-1.5512,-1.748,8,9,-1.434,1.434,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator F,gas_share_electricity,%,2015,2023,93.997,93.707,0.2183,0.232,4,9,3.821,3.821,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator G,gas_share_electricity,%,2015,2023,100.0,100.0,-0.0,-0.0,2,9,9.825,9.825,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator H,gas_share_electricity,%,2015,2023,96.499,96.897,-1.2314,-1.276,3,9,6.323,6.323,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Tunisia,energy_import_dependence,% of primary energy supply,2015,2023,44.952,45.145,0.1676,0.373,4,9,0.0,0.0,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator A,energy_import_dependence,% of primary energy supply,2015,2023,76.259,76.575,1.2542,1.645,1,9,31.307,31.307,7,0.778
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator B,energy_import_dependence,% of primary energy supply,2015,2023,50.989,50.641,-0.4994,-0.979,3,9,6.037,6.037,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator C,energy_import_dependence,% of primary energy supply,2015,2023,28.076,27.646,1.0035,3.574,8,9,-16.876,16.876,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator D,energy_import_dependence,% of primary energy supply,2015,2023,36.186,36.551,-1.2282,-3.394,6,9,-8.766,8.766,7,0.778
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator E,energy_import_dependence,% of primary energy supply,2015,2023,21.683,22.379,0.7665,3.535,9,9,-23.269,23.269,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator F,energy_import_dependence,% of primary energy supply,2015,2023,40.845,40.686,0.0195,0.048,5,9,-4.107,4.107,7,0.778
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator G,energy_import_dependence,% of primary energy supply,2015,2023,56.053,56.011,0.0026,0.005,2,9,11.101,11.101,8,0.889
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator H,energy_import_dependence,% of primary energy supply,2015,2023,33.19,33.148,0.0243,0.073,7,9,-11.761,11.761,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Tunisia,electricity_generation_per_capita,kWh/person,2015,2023,1743.748,1736.738,10.3913,0.596,7,9,0.0,0.0,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator A,electricity_generation_per_capita,kWh/person,2015,2023,1750.313,1787.565,42.954,2.454,6,9,6.565,6.565,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator B,electricity_generation_per_capita,kWh/person,2015,2023,2030.719,2060.845,41.2959,2.034,4,9,286.971,286.971,7,0.778
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator C,electricity_generation_per_capita,kWh/person,2015,2023,1372.666,1386.321,47.7869,3.481,9,9,-371.082,371.082,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator D,electricity_generation_per_capita,kWh/person,2015,2023,1871.613,1877.483,43.9216,2.347,5,9,127.864,127.864,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator E,electricity_generation_per_capita,kWh/person,2015,2023,1672.477,1665.393,25.1439,1.503,8,9,-71.271,71.271,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator F,electricity_generation_per_capita,kWh/person,2015,2023,2324.794,2287.48,38.144,1.641,3,9,581.046,581.046,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator G,electricity_generation_per_capita,kWh/person,2015,2023,2639.418,2640.189,10.9106,0.413,1,9,895.67,895.67,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator H,electricity_generation_per_capita,kWh/person,2015,2023,2566.836,2600.985,55.7907,2.174,2,9,823.088,823.088,7,0.778
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Tunisia,co2_intensity_electricity,gCO2/kWh,2015,2023,447.054,445.259,-2.7988,-0.626,4,9,0.0,0.0,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator A,co2_intensity_electricity,gCO2/kWh,2015,2023,489.211,491.101,-8.2438,-1.685,3,9,42.157,42.157,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator B,co2_intensity_electricity,gCO2/kWh,2015,2023,355.333,361.809,-12.9984,-3.658,8,9,-91.721,91.721,8,0.889
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator C,co2_intensity_electricity,gCO2/kWh,2015,2023,435.887,438.125,-3.0302,-0.695,6,9,-11.167,11.167,8,0.889
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator D,co2_intensity_electricity,gCO2/kWh,2015,2023,603.782,601.118,-0.4143,-0.069,1,9,156.728,156.728,8,0.889
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator E,co2_intensity_electricity,gCO2/kWh,2015,2023,323.602,327.424,-10.6374,-3.287,9,9,-123.452,123.452,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator F,co2_intensity_electricity,gCO2/kWh,2015,2023,358.594,356.801,-1.8971,-0.529,7,9,-88.46,88.46,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator G,co2_intensity_electricity,gCO2/kWh,2015,2023,489.996,490.213,-5.6059,-1.144,2,9,42.942,42.942,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator H,co2_intensity_electricity,gCO2/kWh,2015,2023,446.075,444.977,1.0106,0.227,5,9,-0.979,0.979,8,0.889
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Tunisia,electricity_network_losses,% of supply,2015,2023,14.592,14.736,-0.1006,-0.69,5,9,0.0,0.0,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator A,electricity_network_losses,% of supply,2015,2023,19.584,19.613,-0.0738,-0.377,1,9,4.993,4.993,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator B,electricity_network_losses,% of supply,2015,2023,15.351,15.362,-0.4014,-2.615,4,9,0.759,0.759,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator C,electricity_network_losses,% of supply,2015,2023,14.377,14.453,0.1003,0.698,6,9,-0.214,0.214,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator D,electricity_network_losses,% of supply,2015,2023,13.403,13.356,-0.3489,-2.603,7,9,-1.189,1.189,7,0.778
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator E,electricity_network_losses,% of supply,2015,2023,15.898,16.209,-0.297,-1.868,3,9,1.306,1.306,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator F,electricity_network_losses,% of supply,2015,2023,16.237,16.306,0.0019,0.012,2,9,1.645,1.645,9,1.0
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator G,electricity_network_losses,% of supply,2015,2023,10.223,10.125,-0.1621,-1.586,9,9,-4.369,4.369,7,0.778
+SYNTHETIC-M3-2026.11,synthetic-benchmark-generator-1.0,Comparator H,electricity_network_losses,% of supply,2015,2023,11.255,11.175,-0.1458,-1.295,8,9,-3.337,3.337,9,1.0
