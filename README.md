@@ -1,5 +1,7 @@
 # M4 — Agentic Energy Planning and Optimization System for Tunisia
 
+**Live demo: [http://129.151.225.146](http://129.151.225.146)** — MOCK data; sign in with the demo accounts listed below.
+
 Decision-support application for electricity planning and operation in Tunisia (reference year 2024). A user
 describes a problem in natural language — a **long-term planning goal** (“reduce CO2 by 2035 with a limited budget”)
 or a **short-term operating problem** (“demand increases next month, production capacity is limited, minimize
@@ -8,8 +10,6 @@ asks for missing values, formulates and checks a mathematical optimization probl
 operation); after the user approves it, Pyomo/HiGHS computes several alternative strategies, the agent explains them
 in plain language and recommends one **under the stated priorities**; the user marks a preferred option and an
 administrator records the final decision.
-
-**Live demo** (MOCK data, demo accounts below): http://129.151.225.146
 
 > **The agent proposes, the optimizer calculates, the human decides.**
 > The LLM never produces numerical results; an approved strategy is a recommendation, not an authorization to invest
