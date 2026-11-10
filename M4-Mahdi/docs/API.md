@@ -53,19 +53,21 @@ Error body: `{"detail": "<message>"}` or the FastAPI validation list.
 | GET | `/api/optimization[?kind=]` | user | list of runs (own; admins: all) |
 | GET | `/api/optimization/{run_id}` | owner/admin | run with full result |
 | POST | `/api/comparison` | user | `{"run_ids": [...]}` side-by-side indicators |
-| GET | `/api/agent/info` | user | LLM mode, workflow nodes, tool catalog, human gates |
+| POST | `/api/operations/optimize` | user | solve one short-term operational problem (`OperationalProblem`, MILP) → stored run of kind `operational` (201) |
+| GET | `/api/agent/info` | user | LLM mode, model and fallbacks, LLM usage today vs daily limit, problem types, workflow nodes, tool catalog, human gates |
 | POST | `/api/agent/requests` | user | start a planning request `{"message"}` (201) |
 | GET | `/api/agent/requests` | user | list requests |
-| GET | `/api/agent/requests/{id}` | owner/admin | conversation, trace, intent, questions, investigation, formulation, trade-offs |
+| GET | `/api/agent/requests/{id}` | owner/admin | conversation, trace, `problem_type`, `understanding`, intent, questions, investigation, formulation, `formulation_validation`, trade-offs, `decision_report` (recommendation, narrative), `user_selection`, `llm_usage`, `llm_calls` |
 | GET | `/api/agent/requests/{id}/investigation` | owner/admin | raw tool outputs of the investigation |
 | POST | `/api/agent/requests/{id}/message` | owner/admin | `{"message"?, "answers"?: {question_id: value \| "accept"}}` |
 | POST | `/api/agent/requests/{id}/approve` | owner/admin | `{"approve": bool, "comment"}` — human approval gate, runs optimization |
+| POST | `/api/agent/requests/{id}/select` | owner/admin | `{"strategy_id", "comment"}` — the requester's preferred option (does not approve anything) |
 | GET | `/api/strategies[?request_id=&status=]` | user | strategies (own; admins: all) |
 | GET | `/api/strategies/reference` | user | current approved planning reference (or null) |
 | GET | `/api/strategies/{id}` | owner/admin | report, roadmap, explanation, run validation, decisions, versions |
-| GET | `/api/admin/overview` | admin | counts, recent decisions, reference |
+| GET | `/api/admin/overview` | admin | counts, recent decisions, reference, LLM usage (today, 7 days) |
 | GET | `/api/admin/review-queue` | admin | strategies `pending_review` |
-| POST | `/api/admin/strategies/{id}/approve` | admin | `{"comment"}` → approved + planning reference |
+| POST | `/api/admin/strategies/{id}/approve` | admin | `{"comment"}` → approved; planning strategies become the planning reference, operational ones are recorded as the accepted operating plan |
 | POST | `/api/admin/strategies/{id}/reject` | admin | `{"reason"}` (≥ 5 chars, mandatory) |
 | POST | `/api/admin/strategies/{id}/request-revision` | admin | `{"comment"}` (≥ 5 chars) |
 | GET | `/api/admin/decisions` | admin | append-only audit trail |
@@ -83,7 +85,18 @@ persistent planning request with its own state.
 - Planning request: `needs_clarification` → `awaiting_approval` → (`optimizing`) → `pending_review` | `infeasible`
   → `approved` | `rejected` | `revision_requested`; `formulation_rejected` if the user rejects the formulation.
 - Strategy: `pending_review`, `approved`, `rejected`, `revision_requested`, `superseded` (a newer version exists),
-  `duplicate` (numerically identical to another alternative; not reviewable), `infeasible`.
+  `duplicate` (numerically identical to another alternative; not reviewable), `infeasible`. Flags: `problem_type`
+  (`planning` | `operational`), `recommended` (agent recommendation under the stated priorities),
+  `selected_by_requester`.
+
+Operational problem example (`POST /api/operations/optimize`):
+
+```json
+{"name": "January with an outage", "start_month": "2025-01", "months": 1,
+ "demand_basis": "forecast", "demand_change_pct": 5,
+ "capacity_outages": [{"technology": "gas", "unavailable_mw": 500}],
+ "operating_reserve_pct": 10, "objective": {"method": "single", "primary": "min_operating_cost"}}
+```
 
 ## Examples (PowerShell)
 

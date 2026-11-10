@@ -92,6 +92,11 @@ class ApprovalRequest(BaseModel):
     comment: str = Field("", max_length=2000)
 
 
+class SelectionRequest(BaseModel):
+    strategy_id: str
+    comment: str = Field("", max_length=2000)
+
+
 class DecisionRequest(BaseModel):
     comment: str = Field("", max_length=4000)
 

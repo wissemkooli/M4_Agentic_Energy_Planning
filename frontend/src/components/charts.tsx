@@ -73,20 +73,20 @@ export function ChartFrame({ height = 260, table, children }: { height?: number;
   );
 }
 
-function techsOf(rows: Record<string, number>[]): string[] {
+function techsOf(rows: Record<string, number>[], xKey = "year"): string[] {
   const present = new Set<string>();
-  rows.forEach((r) => Object.keys(r).forEach((k) => k !== "year" && present.add(k)));
+  rows.forEach((r) => Object.keys(r).forEach((k) => k !== xKey && present.add(k)));
   return TECH_ORDER.filter((t) => present.has(t)).concat([...present].filter((t) => !TECH_ORDER.includes(t)));
 }
 
-/** Stacked bars per year by technology (generation GWh, capacity MW, new MW). */
-export function StackedTechBars({ rows, unit, height = 280 }: { rows: Record<string, number>[]; unit: string; height?: number }) {
-  const techs = techsOf(rows);
+/** Stacked bars per year (or per month with xKey="period") by technology (generation GWh, capacity MW, new MW). */
+export function StackedTechBars({ rows, unit, height = 280, xKey = "year", xLabel = "Year" }: { rows: Record<string, number | string>[]; unit: string; height?: number; xKey?: string; xLabel?: string }) {
+  const techs = techsOf(rows as Record<string, number>[], xKey);
   return (
-    <ChartFrame height={height} table={{ columns: ["Year", ...techs.map(label)], rows: rows.map((r) => [r.year, ...techs.map((t) => r[t] ?? 0)]) }}>
+    <ChartFrame height={height} table={{ columns: [xLabel, ...techs.map(label)], rows: rows.map((r) => [r[xKey], ...techs.map((t) => (r[t] as number) ?? 0)]) }}>
       <BarChart data={rows} barCategoryGap="22%">
         {grid}
-        <XAxis dataKey="year" {...axis} />
+        <XAxis dataKey={xKey} {...axis} />
         <YAxis {...axis} tickFormatter={(v) => fmt.num(v)} width={60} />
         <Tooltip cursor={{ fill: "#FAFAFA" }} content={<TooltipBox unit={unit} />} labelFormatter={(l) => l} />
         <Legend iconType="circle" iconSize={8} verticalAlign="bottom" height={36} wrapperStyle={{ fontSize: 12 }} />

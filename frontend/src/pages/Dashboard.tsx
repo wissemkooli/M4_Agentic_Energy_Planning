@@ -102,7 +102,7 @@ export default function Dashboard() {
           {data.approved_reference_strategy ? (
             <Link to={`/strategies/${data.approved_reference_strategy.id}`} className="block rounded-lg border border-gold/50 bg-gold-light/40 p-4 hover:border-gold">
               <div className="font-semibold">{data.approved_reference_strategy.name} <span className="text-ink-soft">v{data.approved_reference_strategy.version}</span></div>
-              {data.approved_reference_strategy.headline && (
+              {data.approved_reference_strategy.headline && !data.approved_reference_strategy.headline.kind && (
                 <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
                   <div><div className="text-xs text-ink-soft">Investment</div>{fmt.num(data.approved_reference_strategy.headline.total_investment_musd)} MUSD</div>
                   <div><div className="text-xs text-ink-soft">Final RE share</div>{fmt.pct(data.approved_reference_strategy.headline.renewable_share_final_year)}</div>

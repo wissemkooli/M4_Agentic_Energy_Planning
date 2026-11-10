@@ -54,7 +54,11 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://openrouter.ai/api/v1"
     llm_api_key: str = ""
     llm_model: str = ""
-    llm_timeout_seconds: float = 45.0
+    llm_fallback_models: str = ""          # comma-separated, OpenRouter fallback routing
+    llm_reasoning_effort: str = "none"     # none (disable reasoning) | low | medium | high | "" (provider default)
+    llm_max_tokens: int = 4000             # includes reasoning tokens of reasoning models
+    llm_daily_call_limit: int = 45         # 0 = unlimited; protects free-tier quotas
+    llm_timeout_seconds: float = 60.0
     llm_temperature: float = 0.1
 
     # --- Optimization -------------------------------------------------------

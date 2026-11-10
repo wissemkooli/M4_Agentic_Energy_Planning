@@ -58,6 +58,24 @@ components:
     validation: [physical_checks, objective_consistency, constraint_report, merit_order_adequacy_recheck]
     infeasibility: elastic reformulation (weighted slacks on policy constraints)
     extensions_not_implemented: [storage, construction_lead_times, endogenous_retirement, hourly_dispatch, network]
+  operations:
+    path: M4-Mahdi/m4/operations
+    responsibility: short-term operational problems (operate the existing fleet over 1-24 months, no investment)
+    modules:
+      schema.py: OperationalProblem (period, demand basis/change, outages, fuel limit, reserve, imports, objective)
+      inputs.py: OperationalInputs built from build_system_inputs (same data, demand pathway and retirements)
+      model.py: Pyomo MILP (integer gas units in service, minimum stable output, reserve, imports, fuel limit, unserved energy)
+      engine.py: [run_operational (single, lexicographic, epsilon), validation, elastic infeasibility diagnosis, status-quo simulation]
+      formulation.py: human-readable formulation shown before approval
+      strategies.py: alternative operating strategies, duplicate detection, schedules, trade-offs, risks
+    decision_variables: ["units[gas,p] integer", "gen[t,p] GWh", "imp[p] GWh", "uns[p] GWh"]
+    objectives: [min_operating_cost, min_unserved, min_gas, min_emissions]
+    alternatives:
+      least_cost_operations: single min_operating_cost
+      reliability_first: lexicographic [min_unserved, min_operating_cost], reserve on M1 upper_80 when achievable
+      min_gas_use: lexicographic [min_gas, min_operating_cost] with unserved <= least-cost unserved
+      balanced_operations: epsilon_constraint min_operating_cost with gas at midpoint (only if gas differs > 1 %)
+    solver: appsi_highs (MIP gap 1e-6); unit_commitment=false gives the LP relaxation
   strategy:
     path: M4-Mahdi/m4/strategy
     responsibility: alternative strategies from distinct formulations, duplicate detection, roadmap, milestones, trade-offs, risks
@@ -70,15 +88,29 @@ components:
   agent:
     path: M4-Mahdi/m4/agent
     framework: LangGraph (StateGraph, state persisted in planning_requests.state)
+    problem_types: {planning: long-term capacity expansion (LP), operational: short-term operation (MILP)}
     llm: optional OpenAI-compatible provider (OpenRouter by default) configured in backend .env
-    llm_roles: [intent_extraction (numbers must appear in user text), investigation_tool_selection (read-only tools), explanation_rephrasing (grounding check)]
-    deterministic_fallback: rule-based intent parser + default investigation plan + template explanations
+    llm_default_model: "nvidia/nemotron-3.5-super-vl:free (fallbacks: nvidia/nemotron-3-ultra-550b-a55b:free, openrouter/free)"
+    llm_controls: [fallback models, reasoning disabled by default (retry with low effort if mandatory), max tokens, timeout,
+                   daily call budget LLM_DAILY_CALL_LIMIT, usage ledger (llm_calls table, per-request totals)]
+    llm_roles: [intent_extraction (numbers must appear in user text), investigation_tool_selection (read-only tools),
+                decision_narrative_rephrasing (grounding check against verified results)]
+    deterministic_fallback: rule-based intent parser + default investigation plan + template explanations and narrative
+    modules: [llm.py, usage.py, intent.py, tools.py, graph.py, explain.py, report.py]
     nodes: [route, understand_request, check_completeness, investigate_data, ask_clarification, build_scenario,
-            formulate_problem, simulate_baseline, optimize_strategies, validate_results, analyze_tradeoffs, explain_strategies]
+            formulate_problem, validate_formulation, simulate_baseline, optimize_strategies, validate_results,
+            analyze_tradeoffs, explain_strategies, build_decision_report]
     tools:
-      investigation: [get_reference_energy_system, get_demand_forecast, get_international_benchmark,
-                      get_technology_assumptions, check_data_quality, simulate_existing_fleet, estimate_unconstrained_investment]
-      after_approval_only: [formulate_optimization_problem, run_optimization (via generate_strategies), compare_scenarios, explain_strategy]
+      investigation_planning: [get_reference_energy_system, get_demand_forecast, get_international_benchmark,
+                               get_technology_assumptions, check_data_quality, simulate_existing_fleet, estimate_unconstrained_investment]
+      investigation_operational: [get_reference_energy_system, get_monthly_demand, get_operational_fleet,
+                                  simulate_status_quo_operation, get_technology_assumptions, check_data_quality]
+      after_approval_only: [formulate_optimization_problem, run_optimization (via generate_strategies),
+                            run_operational (via generate_operational_strategies), compare_scenarios, explain_strategy]
+    formulation_checks: [variables with units, unit consistency vs M1 file, parameter provenance, objective coverage,
+                         constraint coherence, feasibility pre-check (one solve, numbers not shown before approval)]
+    decision_report: [understanding, data used, assumptions, formulation, computation, options, recommendation
+                      (conditional on stated priorities), limitations, narrative (template or grounded LLM)]
   services:
     path: M4-Mahdi/m4/services.py
     responsibility: orchestration between API, engine and persistence; strategy versioning; admin decisions
@@ -86,8 +118,9 @@ components:
     path: M4-Mahdi/m4/db
     default: "sqlite:///./data/m4.db"
     optional: PostgreSQL via DATABASE_URL (psycopg) — not tested
-    tables: [users, refresh_tokens, scenarios, optimization_runs, planning_requests, strategies, strategy_decisions]
+    tables: [users, refresh_tokens, scenarios, optimization_runs, planning_requests, strategies, strategy_decisions, llm_calls]
     initialisation: M4-Mahdi/scripts/init_db.py (create_all + predefined scenarios)
+    migrations: "no Alembic; new columns (strategies.problem_type, recommended, selected_by_requester) added at startup by db/session.py"
   auth:
     path: M4-Mahdi/m4/auth
     password_hashing: Argon2id
@@ -108,12 +141,13 @@ data_flow:
   - "InputBundle + ScenarioConfig -> build_system_inputs -> SystemInputs"
   - "SystemInputs -> simulate (merit order) | run_optimization (Pyomo/HiGHS)"
   - "results -> validation -> OptimizationRun (stored with scenario snapshot and provenance)"
-  - "agent: request -> intent -> investigation -> clarification -> scenario -> formulation -> [user approval] -> simulation -> strategies -> validation -> trade-offs -> explanation -> [admin decision]"
+  - "agent: request -> intent (planning | operational) -> investigation -> clarification -> scenario/problem -> formulation -> formulation checks -> [user approval] -> simulation -> strategies -> validation -> trade-offs -> explanation -> recommendation + decision report -> [user preferred option] -> [admin decision]"
   - "React -> FastAPI -> services/agent -> engine -> database -> FastAPI -> React"
 
 human_approval_points:
   - {gate: clarification, actor: requester, rule: "missing numeric values (e.g. 'limited budget') are asked, never assumed"}
   - {gate: formulation_approval, actor: requester or admin, endpoint: "POST /api/agent/requests/{id}/approve", rule: "optimization starts only after approval"}
+  - {gate: preferred_option, actor: requester, endpoint: "POST /api/agent/requests/{id}/select", rule: "records the option the requester prefers; approves nothing"}
   - {gate: strategy_decision, actor: ADMIN, endpoints: ["POST /api/admin/strategies/{id}/approve", "/reject (reason required)", "/request-revision"], rule: "approved strategy = planning reference; decisions append-only"}
 
 api:
@@ -139,6 +173,7 @@ api:
       - "POST /optimization/run"
       - "POST /simulation/run"
       - "POST /optimization/pareto"
+      - "POST /operations/optimize"
       - "GET /optimization"
       - "GET /optimization/{id}"
       - "POST /comparison"
@@ -148,6 +183,7 @@ api:
       - "GET /agent/requests/{id}/investigation"
       - "POST /agent/requests/{id}/message"
       - "POST /agent/requests/{id}/approve"
+      - "POST /agent/requests/{id}/select"
       - "GET /strategies"
       - "GET /strategies/reference"
       - "GET /strategies/{id}"
@@ -171,12 +207,15 @@ configuration:
   backend_env: M4-Mahdi/.env (template M4-Mahdi/.env.example)
   frontend_env: frontend/.env (template frontend/.env.example)
   required_in_production: [JWT_SECRET_KEY, APP_ENV=production, CORS_ORIGINS, REFRESH_COOKIE_SECURE=true behind HTTPS]
-  optional: [LLM_API_KEY, LLM_MODEL, LLM_BASE_URL, DATABASE_URL, DATA_SOURCES_FILE, SOLVER_NAME]
+  optional: [LLM_API_KEY, LLM_MODEL, LLM_FALLBACK_MODELS, LLM_REASONING_EFFORT, LLM_MAX_TOKENS, LLM_DAILY_CALL_LIMIT,
+             LLM_BASE_URL, DATABASE_URL, DATA_SOURCES_FILE, SOLVER_NAME]
   secrets_policy: ".env files are git-ignored; the LLM key never reaches the browser"
 
 testing:
-  backend: "M4-Mahdi/tests (pytest): data, adapters, modeling, optimization, scenarios/strategies, agent, API/security"
-  frontend: "frontend/src/test (Vitest + Testing Library): form validation, guards, loading/error/empty states"
+  backend: "M4-Mahdi/tests (pytest): data, adapters, modeling, optimization, operations (MILP), scenarios/strategies, agent, API/security"
+  live_llm: "M4-Mahdi/tests/test_live_llm.py (opt-in with M4_LIVE_LLM=1; uses provider quota)"
+  llm_check: "M4-Mahdi/scripts/check_llm.py (key, model availability, one JSON call, one tool call)"
+  frontend: "frontend/src/test (Vitest + Testing Library): form validation, guards, loading/error/empty states, decision report, preferred option, formulation checks"
   scripts: [scripts/run-tests.ps1]
 
 setup_scripts:

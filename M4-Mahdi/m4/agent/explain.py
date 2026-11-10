@@ -17,7 +17,32 @@ def _pct(x: float | None) -> str:
     return "n/a" if x is None else f"{x * 100:.1f} %"
 
 
+def operational_template_explanation(strategy: dict) -> dict:
+    rep = strategy["report"]
+    h = rep["headline"]
+    sched = rep["schedule"]
+    trade = rep.get("tradeoff_vs_least_cost")
+    if trade:
+        why = (f"Compared with the least-cost operation it changes the operating cost by "
+               f"{trade['additional_operating_cost_musd']:+,.2f} MUSD, gas use by {-trade['gas_saved_gwh']:+,.0f} GWh and "
+               f"unserved energy by {-trade['unserved_reduced_gwh']:+,.1f} GWh.")
+    else:
+        why = "It is the cheapest way to operate the available fleet while respecting every approved constraint."
+    first = sched[0]
+    return {
+        "source": "template",
+        "summary": (f"{strategy['name']}: {rep['approach']} Minimum reserve margin {_pct(h['min_reserve_margin'])}; "
+                    f"renewables supply {_pct(h['renewable_share'])} of demand."),
+        "what": rep["approach"],
+        "why": f"Strategic objective: {strategy['strategic_objective']}. {why}",
+        "when": f"Period {sched[0]['period']} to {sched[-1]['period']}. First month: " + "; ".join(first["actions"]) + ".",
+        "tradeoffs": rep["advantages"] + rep["disadvantages"],
+    }
+
+
 def template_explanation(strategy: dict) -> dict:
+    if strategy["report"].get("kind") == "operational":
+        return operational_template_explanation(strategy)
     rep = strategy["report"]
     h = rep["headline"]
     road = rep["roadmap"]
@@ -46,8 +71,8 @@ def _facts(strategy: dict) -> dict:
     rep = strategy["report"]
     return {"name": strategy["name"], "objective": strategy["strategic_objective"], "approach": rep["approach"],
             "headline": rep["headline"], "tradeoff_vs_least_cost": rep.get("tradeoff_vs_least_cost"),
-            "milestones": rep["milestones"], "advantages": rep["advantages"], "disadvantages": rep["disadvantages"],
-            "data_status": rep["data_status"]}
+            "milestones": rep.get("milestones") or rep.get("schedule"), "advantages": rep["advantages"],
+            "disadvantages": rep["disadvantages"], "data_status": rep["data_status"]}
 
 
 def _collect_numbers(obj, out: set[float]) -> None:
@@ -88,7 +113,7 @@ def ungrounded_numbers(text: str, facts: dict) -> list[str]:
     return bad
 
 
-LLM_SYSTEM = """You explain long-term electricity strategies for decision-makers.
+LLM_SYSTEM = """You explain electricity strategies for decision-makers.
 Use ONLY the facts provided. Do not introduce any number that is not present in the facts.
 Do not claim data is real if data_status is MOCK. Be concise and neutral.
 Return JSON: {"summary": str, "what": str, "why": str, "when": str, "tradeoffs": [str]}."""
@@ -97,7 +122,7 @@ Return JSON: {"summary": str, "what": str, "why": str, "when": str, "tradeoffs":
 def llm_explanation(strategy: dict, client: LLMClient) -> tuple[dict | None, str | None]:
     facts = _facts(strategy)
     try:
-        data = client.json_completion(LLM_SYSTEM, json.dumps(facts, default=str), max_tokens=900)
+        data = client.json_completion(LLM_SYSTEM, json.dumps(facts, default=str), purpose="strategy_explanation")
     except LLMError as exc:
         return None, str(exc)
     text = " ".join([str(data.get(k, "")) for k in ("summary", "what", "why", "when")]

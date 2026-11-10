@@ -41,3 +41,24 @@ parameters:
     value: 0.55
     unit: "fraction of monthly supply"
     note: "Proxy for intra-day flexibility limits (storage and hourly dispatch are not modelled at monthly resolution)"
+  # --- Short-term operational problems (monthly unit commitment, MILP) -- MOCK values ---
+  thermal_unit_size_mw:
+    value: 250
+    unit: "MW per dispatchable (gas) unit"
+    note: "Illustrative block size used to count gas units kept in service; installed gas capacity / size = number of units"
+  thermal_min_stable_fraction:
+    value: 0.40
+    unit: "fraction of available unit output"
+    note: "A unit kept in service produces at least this share of its available output on average over the month"
+  thermal_unit_monthly_fixed_cost_musd:
+    value: 0.25
+    unit: "MUSD per unit-month in service"
+    note: "Illustrative standby, staffing and start-up cost of keeping one gas unit in service for a month"
+  operating_reserve_margin:
+    value: 0.10
+    unit: "fraction of monthly peak demand"
+    note: "Firm capacity in service must exceed (1 + margin) x monthly peak demand in operational problems"
+  value_of_lost_load_usd_per_mwh:
+    value: 3000.0
+    unit: "USD/MWh"
+    note: "Penalty on unserved energy in operational problems (illustrative value of lost load)"

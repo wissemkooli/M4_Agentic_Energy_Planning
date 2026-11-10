@@ -15,6 +15,9 @@ from ..modeling.simulation import simulate
 from ..modeling.system import build_system_inputs
 from ..optimization.engine import run_optimization
 from ..optimization.formulation import describe_formulation
+from ..operations.engine import simulate_status_quo
+from ..operations.inputs import build_operational_inputs
+from ..operations.schema import OperationalProblem
 from ..scenarios.schema import ConstraintSet, ObjectiveConfig, ScenarioConfig
 
 
@@ -120,6 +123,84 @@ def estimate_unconstrained_investment(bundle: InputBundle, start_year: int | Non
             "note": "Computed by the optimizer without any budget constraint (reference point only)."}
 
 
+# ------------------------------------------------------------------ short-term operational tools
+def _op_problem(start_month: str, months: int = 1, demand_basis: str = "forecast", demand_change_pct: float = 0.0,
+                capacity_outages: list | None = None, operating_reserve_pct: float | None = None,
+                gas_generation_limit_gwh: float | None = None) -> OperationalProblem:
+    return OperationalProblem(name="Investigation", start_month=start_month, months=int(months or 1),
+                              demand_basis=demand_basis or "forecast", demand_change_pct=float(demand_change_pct or 0),
+                              capacity_outages=capacity_outages or [], operating_reserve_pct=operating_reserve_pct,
+                              gas_generation_limit_gwh=gas_generation_limit_gwh)
+
+
+def get_monthly_demand(bundle: InputBundle, start_month: str, months: int = 1, **_) -> dict:
+    """M1 monthly demand for the operating period, with interval bounds and the same month one year earlier."""
+    m = bundle.demand.monthly.set_index("month")
+    p = _op_problem(start_month, months)
+    rows = []
+    for y, mo in p.periods:
+        key = f"{y}-{mo:02d}"
+        if key not in m.index:
+            rows.append({"month": key, "available": False})
+            continue
+        r = m.loc[key]
+        prev = f"{y - 1}-{mo:02d}"
+        prev_val = None
+        if prev in m.index:
+            pr = m.loc[prev]
+            prev_val = float(pr["actual_gwh"]) if pr["actual_gwh"] == pr["actual_gwh"] and pr["actual_gwh"] is not None \
+                else float(pr["forecast_gwh"])
+        row = {"month": key, "available": True, "is_forecast": bool(r["is_forecast"]),
+               "forecast_gwh": round(float(r["forecast_gwh"]), 1), "same_month_previous_year_gwh": round(prev_val, 1) if prev_val else None}
+        for c in ("lower_80", "upper_80", "lower_95", "upper_95"):
+            if c in r.index and r[c] == r[c]:
+                row[c] = round(float(r[c]), 1)
+        if prev_val:
+            row["change_vs_previous_year_pct"] = round(100 * (row["forecast_gwh"] / prev_val - 1), 2)
+        rows.append(row)
+    return {"data_status": bundle.demand.provenance.data_status.value, "dataset_version": bundle.demand.provenance.dataset_version,
+            "latest_actual_month": _latest_actual(bundle), "first_forecast_month": bundle.demand.first_forecast_month,
+            "months": rows}
+
+
+def _latest_actual(bundle: InputBundle) -> str | None:
+    m = bundle.demand.monthly
+    act = m[m["actual_gwh"].notna()]
+    return str(act["month"].max()) if len(act) else None
+
+
+def get_operational_fleet(bundle: InputBundle, start_month: str, months: int = 1, capacity_outages: list | None = None,
+                          demand_change_pct: float = 0.0, operating_reserve_pct: float | None = None, **_) -> dict:
+    """Units and capacity available in the period, peak demand and the highest reserve margin achievable."""
+    inp = build_operational_inputs(bundle, _op_problem(start_month, months, demand_change_pct=demand_change_pct,
+                                                       capacity_outages=capacity_outages,
+                                                       operating_reserve_pct=operating_reserve_pct))
+    rows = []
+    for p in inp.periods:
+        all_units = {(t, p): inp.units_available[(t, p)] for t in inp.dispatchable}
+        firm = inp.firm_capacity_mw(all_units, p)
+        rows.append({"month": inp.labels[p], "peak_mw": round(inp.peak_mw[p], 1), "firm_capacity_all_units_mw": round(firm, 1),
+                     "max_reserve_margin": round(firm / inp.peak_mw[p] - 1, 4),
+                     "units_available": {t: inp.units_available[(t, p)] for t in inp.dispatchable},
+                     "units_total": {t: inp.units_total[(t, p)] for t in inp.dispatchable},
+                     "capacity_in_service_mw": {t: round(inp.capacity_mw[(t, p)], 1) for t in inp.techs}})
+    return {"data_status": inp.data_status, "unit_size_mw": inp.unit_size_mw, "min_stable_fraction": inp.min_stable,
+            "required_reserve_margin": inp.reserve_margin, "months": rows,
+            "max_achievable_reserve_margin": min(r["max_reserve_margin"] for r in rows),
+            "note": "Firm capacity counts every available gas unit plus the capacity credit of the other technologies."}
+
+
+def simulate_status_quo_operation(bundle: InputBundle, start_month: str, months: int = 1, capacity_outages: list | None = None,
+                                  demand_change_pct: float = 0.0, demand_basis: str = "forecast",
+                                  operating_reserve_pct: float | None = None, gas_generation_limit_gwh: float | None = None,
+                                  **_) -> dict:
+    """Merit-order operation with every available unit in service (reference before optimization)."""
+    inp = build_operational_inputs(bundle, _op_problem(start_month, months, demand_basis, demand_change_pct, capacity_outages,
+                                                       operating_reserve_pct, gas_generation_limit_gwh))
+    res = simulate_status_quo(inp)
+    return {"method": res["method"], "summary": res["summary"], "issues": res["issues"], "data_status": res["data_status"]}
+
+
 def formulate_optimization_problem(bundle: InputBundle, scenario: dict, **_) -> dict:
     return describe_formulation(build_system_inputs(bundle, ScenarioConfig.model_validate(scenario)))
 
@@ -144,6 +225,15 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          "Run the least-cost optimization without budget limit to obtain a reference investment requirement.",
          {"type": "object", "properties": {**_H, "reserve_margin_pct": {"type": "number"}}},
          estimate_unconstrained_investment),
+    Tool("get_monthly_demand", "M1 monthly demand for a short operating period (with interval bounds and previous year).",
+         {"type": "object", "properties": {"start_month": {"type": "string", "description": "YYYY-MM"},
+                                           "months": {"type": "integer"}}, "required": ["start_month"]}, get_monthly_demand),
+    Tool("get_operational_fleet", "Gas units and capacity available in an operating period, peak demand and maximum reserve margin.",
+         {"type": "object", "properties": {"start_month": {"type": "string"}, "months": {"type": "integer"}},
+          "required": ["start_month"]}, get_operational_fleet),
+    Tool("simulate_status_quo_operation", "Simulate operating the period with every available unit in service (merit order).",
+         {"type": "object", "properties": {"start_month": {"type": "string"}, "months": {"type": "integer"}},
+          "required": ["start_month"]}, simulate_status_quo_operation),
     Tool("formulate_optimization_problem", "Describe the mathematical formulation of a scenario.",
          {"type": "object", "properties": {"scenario": {"type": "object"}}, "required": ["scenario"]},
          formulate_optimization_problem, investigation=False),
@@ -151,6 +241,10 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
 
 MANDATORY_INVESTIGATION = ["get_reference_energy_system", "get_demand_forecast", "get_technology_assumptions",
                            "check_data_quality"]
+MANDATORY_OPERATIONAL = ["get_reference_energy_system", "get_monthly_demand", "get_technology_assumptions",
+                         "check_data_quality", "get_operational_fleet", "simulate_status_quo_operation"]
+OPERATIONAL_TOOLS = {"get_monthly_demand", "get_operational_fleet", "simulate_status_quo_operation"}
+PLANNING_ONLY_TOOLS = {"simulate_existing_fleet", "estimate_unconstrained_investment", "get_demand_forecast"}
 
 
 def call_tool(bundle: InputBundle, name: str, args: dict | None = None) -> dict:

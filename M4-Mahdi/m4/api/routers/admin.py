@@ -10,6 +10,7 @@ from ...auth.security import create_user
 from ...db.models import PlanningRequest, Strategy, StrategyDecision, User
 from ...db.session import get_db
 from ... import services
+from ...agent.usage import usage_summary
 from ..schemas import DecisionRequest, RejectRequest, RevisionRequest, UserCreate, UserOut, UserUpdate
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -39,6 +40,8 @@ def overview(admin: User = Depends(require_admin), db: Session = Depends(get_db)
         "users": count(User),
         "recent_decisions": [services.decision_dict(d, s) for d, s in recent],
         "approved_reference_strategy": services.strategy_dict(ref) if ref else None,
+        "llm_usage_today": usage_summary(1),
+        "llm_usage_7_days": usage_summary(7),
     }
 
 

@@ -1235,6 +1235,107 @@
         }
       }
     },
+    "/api/agent/requests/{request_id}/select": {
+      "post": {
+        "tags": [
+          "agent & strategies"
+        ],
+        "summary": "Select Preferred",
+        "operationId": "select_preferred_api_agent_requests__request_id__select_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/operations/optimize": {
+      "post": {
+        "tags": [
+          "agent & strategies",
+          "operations"
+        ],
+        "summary": "Optimize Operations",
+        "description": "Solve one short-term operational problem (MILP) directly, without the agent.",
+        "operationId": "optimize_operations_api_operations_optimize_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationalProblem"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/strategies": {
       "get": {
         "tags": [
@@ -1892,6 +1993,27 @@
         ],
         "title": "ApprovalRequest"
       },
+      "CapacityOutage": {
+        "properties": {
+          "technology": {
+            "type": "string",
+            "title": "Technology"
+          },
+          "unavailable_mw": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Unavailable Mw",
+            "description": "Installed capacity out of service during the period"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "technology",
+          "unavailable_mw"
+        ],
+        "title": "CapacityOutage"
+      },
       "CompareRequest": {
         "properties": {
           "run_ids": {
@@ -2226,6 +2348,70 @@
         "type": "object",
         "title": "ObjectiveConfig"
       },
+      "OpObjectiveConfig": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "single",
+              "lexicographic",
+              "epsilon_constraint"
+            ],
+            "title": "Method",
+            "default": "single"
+          },
+          "primary": {
+            "type": "string",
+            "enum": [
+              "min_operating_cost",
+              "min_unserved",
+              "min_gas",
+              "min_emissions"
+            ],
+            "title": "Primary",
+            "default": "min_operating_cost"
+          },
+          "priorities": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "min_operating_cost",
+                "min_unserved",
+                "min_gas",
+                "min_emissions"
+              ]
+            },
+            "type": "array",
+            "title": "Priorities"
+          },
+          "lexicographic_tolerance_pct": {
+            "type": "number",
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Lexicographic Tolerance Pct",
+            "default": 1.0
+          },
+          "epsilon_bounds": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "propertyNames": {
+              "enum": [
+                "min_operating_cost",
+                "min_unserved",
+                "min_gas",
+                "min_emissions"
+              ]
+            },
+            "type": "object",
+            "title": "Epsilon Bounds",
+            "description": "Absolute upper bounds on other objectives (objective units)"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "OpObjectiveConfig"
+      },
       "OperatingAssumptions": {
         "properties": {
           "renewable_availability_multiplier": {
@@ -2272,6 +2458,159 @@
         "additionalProperties": false,
         "type": "object",
         "title": "OperatingAssumptions"
+      },
+      "OperationalProblem": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Description",
+            "default": ""
+          },
+          "start_month": {
+            "type": "string",
+            "title": "Start Month",
+            "description": "First month of the operating period, YYYY-MM"
+          },
+          "months": {
+            "type": "integer",
+            "maximum": 24.0,
+            "minimum": 1.0,
+            "title": "Months",
+            "default": 1
+          },
+          "demand_basis": {
+            "type": "string",
+            "enum": [
+              "forecast",
+              "lower_80",
+              "upper_80",
+              "lower_95",
+              "upper_95"
+            ],
+            "title": "Demand Basis",
+            "description": "M1 column used for monthly demand",
+            "default": "forecast"
+          },
+          "demand_change_pct": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": -50.0,
+            "title": "Demand Change Pct",
+            "description": "Additional change applied to the M1 demand (stress test)",
+            "default": 0.0
+          },
+          "capacity_outages": {
+            "items": {
+              "$ref": "#/components/schemas/CapacityOutage"
+            },
+            "type": "array",
+            "title": "Capacity Outages"
+          },
+          "gas_generation_limit_gwh": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gas Generation Limit Gwh",
+            "description": "Fuel availability limit over the period"
+          },
+          "max_import_share_pct": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Import Share Pct",
+            "description": "Monthly import limit (% of demand)"
+          },
+          "operating_reserve_pct": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operating Reserve Pct"
+          },
+          "reserve_demand_basis": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "forecast",
+                  "lower_80",
+                  "upper_80",
+                  "lower_95",
+                  "upper_95"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reserve Demand Basis",
+            "description": "M1 column used to size the reserve (default: same as demand_basis)"
+          },
+          "allow_unserved_energy": {
+            "type": "boolean",
+            "title": "Allow Unserved Energy",
+            "default": true
+          },
+          "value_of_lost_load_usd_per_mwh": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Of Lost Load Usd Per Mwh"
+          },
+          "unit_commitment": {
+            "type": "boolean",
+            "title": "Unit Commitment",
+            "description": "Integer number of gas units in service (MILP); False = LP relaxation",
+            "default": true
+          },
+          "allow_imports": {
+            "type": "boolean",
+            "title": "Allow Imports",
+            "default": true
+          },
+          "objective": {
+            "$ref": "#/components/schemas/OpObjectiveConfig"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "start_month"
+        ],
+        "title": "OperationalProblem"
       },
       "OptimizationRequest": {
         "properties": {
@@ -2475,6 +2814,25 @@
           "config"
         ],
         "title": "ScenarioCreate"
+      },
+      "SelectionRequest": {
+        "properties": {
+          "strategy_id": {
+            "type": "string",
+            "title": "Strategy Id"
+          },
+          "comment": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Comment",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy_id"
+        ],
+        "title": "SelectionRequest"
       },
       "SimulationRequest": {
         "properties": {

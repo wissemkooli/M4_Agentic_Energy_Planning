@@ -2,11 +2,14 @@ import { Bot, CheckCircle2, ChevronRight, CircleDot, Loader2, Plus, Send, Shield
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
-import type { ChatMessage, Formulation, PlanningRequest, Question, TraceStep } from "../api/types";
+import type { ChatMessage, DecisionReport, Formulation, FormulationValidation, PlanningRequest, Question, StrategySummary, TraceStep } from "../api/types";
+import { DecisionReportView, FormulationChecks, LlmUsageCard, UnderstandingCard } from "../components/decision";
 import { useApi } from "../components/hooks";
 import { Card, DataStatusBadge, ErrorState, Loading, Notice, PageHeader, StatusBadge, fmt } from "../components/ui";
 
 const EXAMPLES = [
+  "We expect electricity demand to increase next month. We have limited production capacity and want to minimize operational costs while satisfying demand.",
+  "For the next 3 months, 500 MW of gas capacity is unavailable for maintenance. Minimize operating cost and gas consumption with a 10% reserve margin.",
   "Reduce CO2 emissions by 2035 with a limited investment budget while keeping electricity supply reliable.",
   "I want Tunisia to reduce gas dependence and increase renewable electricity by 2035, but I have a limited investment budget.",
   "Minimize cost while ensuring at least 40% renewable electricity by 2030 and reducing emissions by 25% by 2035.",
@@ -19,19 +22,22 @@ const WORKFLOW = [
   ["ask_clarification", "Clarification"],
   ["build_scenario", "Scenario construction"],
   ["formulate_problem", "Mathematical formulation"],
+  ["validate_formulation", "Formulation checks & feasibility"],
   ["human_approval", "Human approval"],
   ["simulate_baseline", "Energy simulation"],
   ["optimize_strategies", "Optimization (Pyomo + HiGHS)"],
   ["validate_results", "Result validation"],
   ["analyze_tradeoffs", "Trade-off analysis"],
-  ["explain_strategies", "Explanation & admin submission"],
+  ["explain_strategies", "Strategy explanations"],
+  ["build_decision_report", "Recommendation & decision report"],
 ];
 
 export default function PlanningAgent() {
   const { requestId } = useParams();
   const navigate = useNavigate();
   const list = useApi<PlanningRequest[]>("/api/agent/requests");
-  const info = useApi<{ llm_configured: boolean; llm_model: string | null; mode: string }>("/api/agent/info");
+  const info = useApi<{ llm_configured: boolean; llm_model: string | null; mode: string; llm_usage_today?: { calls: number; daily_call_limit: number | null } }>("/api/agent/info");
+  const [strategies, setStrategies] = useState<StrategySummary[]>([]);
   const [req, setReq] = useState<PlanningRequest | null>(null);
   const [loadingReq, setLoadingReq] = useState(false);
   const [busy, setBusy] = useState<null | "message" | "optimize">(null);
@@ -55,6 +61,29 @@ export default function PlanningAgent() {
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
   }, [req?.messages?.length, busy]);
+
+  const nStrategies = req?.strategy_ids?.length ?? 0;
+  useEffect(() => {
+    if (!req?.id || nStrategies === 0) {
+      setStrategies([]);
+      return;
+    }
+    api.get<StrategySummary[]>(`/api/strategies?request_id=${req.id}`).then((r) => setStrategies(r.data)).catch(() => setStrategies([]));
+  }, [req?.id, nStrategies, req?.user_selection?.strategy_id]);
+
+  const selectOption = async (strategyId: string) => {
+    if (!req) return;
+    setBusy("message");
+    setError(null);
+    try {
+      const r = await api.post<PlanningRequest>(`/api/agent/requests/${req.id}/select`, { strategy_id: strategyId });
+      setReq(r.data);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const send = async (message: string | null, answers?: Record<string, unknown>) => {
     setBusy("message");
@@ -100,12 +129,12 @@ export default function PlanningAgent() {
       <PageHeader
         eyebrow="Agentic workflow"
         title="AI energy planning agent"
-        subtitle="Describe objectives and constraints. The agent investigates the data, asks for missing values, proposes a formulation for your approval, then runs the optimizer. Every number comes from Python tools and HiGHS."
+        subtitle="Describe a long-term planning goal or a short-term operating problem. The agent investigates the data, asks for missing values, proposes a validated formulation for your approval, then runs the optimizer and recommends an option — you decide. Every number comes from Python tools and HiGHS."
         actions={
           <>
             {info.data && (
               <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${info.data.llm_configured ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-line bg-white text-ink-soft"}`}>
-                {info.data.llm_configured ? `LLM: ${info.data.llm_model}` : "Deterministic mode (no LLM configured)"}
+                {info.data.llm_configured ? `LLM: ${info.data.llm_model}${info.data.llm_usage_today?.daily_call_limit ? ` · ${info.data.llm_usage_today.calls}/${info.data.llm_usage_today.daily_call_limit} calls today` : ""}` : "Deterministic mode (no LLM configured)"}
               </span>
             )}
             <button className="btn-outline" onClick={() => navigate("/agent")}><Plus size={16} /> New request</button>
@@ -141,17 +170,19 @@ export default function PlanningAgent() {
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2">
                 <StatusBadge status={req.status} />
+                {req.problem_type && <span className="rounded-full border border-line bg-white px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-ink-soft">{req.problem_type === "operational" ? "Operational (MILP)" : "Long-term planning (LP)"}</span>}
                 {req.investigation && <DataStatusBadge status={req.investigation.data_status} />}
                 {req.owner_email && <span className="text-xs text-ink-soft">Requested by {req.owner_email}</span>}
               </div>
               {req.messages?.map((m, i) => (
-                <MessageView key={i} m={m} req={req} last={i === (req.messages?.length ?? 0) - 1} busy={!!busy} onAnswer={(a) => send(null, a)} onApprove={approve} />
+                <MessageView key={i} m={m} req={req} last={i === (req.messages?.length ?? 0) - 1} busy={!!busy} onAnswer={(a) => send(null, a)} onApprove={approve}
+                  strategies={strategies} onSelect={selectOption} />
               ))}
               {busy === "optimize" && (
                 <div className="card flex items-center gap-3 p-4 text-sm"><Loader2 className="animate-spin text-gold" size={18} />Simulating the system and solving several optimization problems with HiGHS… this takes a few seconds.</div>
               )}
               {req.status === "pending_review" && (
-                <Notice tone="ok">Strategies submitted for administrator review. <Link className="font-medium underline" to={`/strategies?request=${req.id}`}>Open strategies</Link></Notice>
+                <Notice tone="ok">Strategies submitted for administrator review{req.user_selection ? ` with your preferred option “${req.user_selection.strategy_name}”` : " — mark your preferred option in the report above"}. <Link className="font-medium underline" to={`/strategies?request=${req.id}`}>Open strategies</Link></Notice>
               )}
               {req.status === "revision_requested" && req.admin_feedback && (
                 <Notice tone="warn">An administrator requested a revision: “{req.admin_feedback.comment}”. Describe the modification below; a new formulation will be proposed for approval.</Notice>
@@ -179,6 +210,7 @@ export default function PlanningAgent() {
         {/* workflow + investigation */}
         <div className="space-y-4">
           <WorkflowPanel trace={req?.trace ?? []} status={req?.status} busy={busy} />
+          {req?.understanding && <UnderstandingCard u={req.understanding} />}
           {req?.investigation && (
             <Card title="Investigation report" subtitle={`Planner: ${req.investigation.planner}`}>
               <ul className="space-y-2 text-xs">
@@ -198,6 +230,7 @@ export default function PlanningAgent() {
               </div>
             </Card>
           )}
+          {req?.llm_usage && <LlmUsageCard usage={req.llm_usage} calls={req.llm_calls} />}
           {req?.warnings && req.warnings.length > 0 && <Notice tone="warn">{req.warnings.join(" ")}</Notice>}
         </div>
       </div>
@@ -217,7 +250,7 @@ function WorkflowPanel({ trace, status, busy }: { trace: TraceStep[]; status?: s
           const isGate = id === "human_approval";
           const gateDone = isGate && approved;
           const waiting = (isGate && status === "awaiting_approval") || (id === "ask_clarification" && status === "needs_clarification");
-          const running = busy === "optimize" && !step && ["simulate_baseline", "optimize_strategies", "validate_results", "analyze_tradeoffs", "explain_strategies"].includes(id);
+          const running = busy === "optimize" && !step && ["simulate_baseline", "optimize_strategies", "validate_results", "analyze_tradeoffs", "explain_strategies", "build_decision_report"].includes(id);
           return (
             <li key={id} className="flex items-start gap-2 text-xs">
               {step?.status === "error" ? <XCircle size={14} className="mt-0.5 text-red-600" /> :
@@ -237,7 +270,7 @@ function WorkflowPanel({ trace, status, busy }: { trace: TraceStep[]; status?: s
   );
 }
 
-function MessageView({ m, req, last, busy, onAnswer, onApprove }: { m: ChatMessage; req: PlanningRequest; last: boolean; busy: boolean; onAnswer: (a: Record<string, unknown>) => void; onApprove: (ok: boolean, comment: string) => void }) {
+function MessageView({ m, req, last, busy, onAnswer, onApprove, strategies, onSelect }: { m: ChatMessage; req: PlanningRequest; last: boolean; busy: boolean; onAnswer: (a: Record<string, unknown>) => void; onApprove: (ok: boolean, comment: string) => void; strategies: StrategySummary[]; onSelect: (id: string) => void }) {
   const mine = m.role === "user";
   const Icon = m.role === "assistant" ? Bot : m.role === "admin" ? ShieldCheck : UserIcon;
   return (
@@ -250,10 +283,14 @@ function MessageView({ m, req, last, busy, onAnswer, onApprove }: { m: ChatMessa
           <QuestionsForm questions={(m.data?.questions as Question[]) ?? []} busy={busy} onSubmit={onAnswer} />
         )}
         {m.kind === "formulation" && (
-          <FormulationView data={m.data as { formulation: Formulation; strategy_plan: PlanningRequest["strategy_plan"]; assumptions: string[]; notes: string[] }}
+          <FormulationView data={m.data as { formulation: Formulation; strategy_plan: PlanningRequest["strategy_plan"]; assumptions: string[]; notes: string[]; validation?: FormulationValidation }}
             canApprove={last && req.status === "awaiting_approval"} busy={busy} onApprove={onApprove} />
         )}
         {m.kind === "results" && <ResultsTable rows={(m.data?.tradeoffs as { table: Record<string, unknown>[] })?.table ?? []} req={req} />}
+        {m.kind === "results" && (m.data?.report as DecisionReport | undefined) && (
+          <DecisionReportView report={m.data!.report as DecisionReport} strategies={strategies} selection={req.user_selection}
+            canSelect={["pending_review", "approved"].includes(req.status) && last} busy={busy} onSelect={onSelect} />
+        )}
         {m.kind === "infeasible" && <InfeasibleView data={m.data as { diagnostics: { summary: string; violations: { title: string; total_shortfall: number; unit: string; years: number[] }[] } }} />}
       </div>
     </div>
@@ -270,10 +307,16 @@ export function QuestionsForm({ questions, busy, onSubmit }: { questions: Questi
       if (q.type === "multi_select") {
         if (!v || (v as string[]).length === 0) return setErr("Select at least one objective.");
         out[q.id] = v;
+      } else if (q.type === "single_select" && q.options?.some((o) => o.value === v)) {
+        out[q.id] = v;
+      } else if (q.type === "single_select" && !q.allow_number) {
+        return setErr(`Choose an option: ${q.question}`);
       } else {
         const s = String(v ?? "").trim();
         if (!s) return setErr(`Answer: ${q.question}`);
-        if (q.id === "budget_total_musd" && s.toLowerCase() === "unlimited") out[q.id] = "unlimited";
+        if (["budget_total_musd", "gas_limit_gwh"].includes(q.id) && ["unlimited", "none"].includes(s.toLowerCase())) out[q.id] = s.toLowerCase();
+        else if (q.type === "single_select" && Number.isNaN(Number(s.replace("%", "")))) return setErr(`"${s}" is not a valid percentage.`);
+        else if (q.type === "single_select") out[q.id] = Number(s.replace("%", ""));
         else if (s === "accept") out[q.id] = "accept";
         else if (Number.isNaN(Number(s)) || Number(s) < 0) return setErr(`"${s}" is not a valid non-negative number.`);
         else out[q.id] = Number(s);
@@ -303,6 +346,23 @@ export function QuestionsForm({ questions, busy, onSubmit }: { questions: Questi
                 </label>
               ))}
             </div>
+          ) : q.type === "single_select" ? (
+            <div className="mt-2 grid gap-1">
+              {q.options?.map((o) => (
+                <label key={o.value} className="flex items-center gap-2 text-sm">
+                  <input type="radio" name={q.id} className="accent-[#C6A04A]" checked={values[q.id] === o.value} onChange={() => setValues({ ...values, [q.id]: o.value })} />
+                  {o.label}
+                </label>
+              ))}
+              {q.allow_number && (
+                <div className="flex items-center gap-2">
+                  <input aria-label={`${q.question} (custom value)`} className="input max-w-[140px]" placeholder="e.g. 8"
+                    value={q.options?.some((o) => o.value === values[q.id]) ? "" : ((values[q.id] as string) ?? "")}
+                    onChange={(e) => setValues({ ...values, [q.id]: e.target.value })} />
+                  <span className="text-xs text-ink-soft">{q.unit}</span>
+                </div>
+              )}
+            </div>
           ) : (
             <div className="mt-2 flex items-center gap-2">
               <input aria-label={q.question} className="input max-w-[200px]" value={(values[q.id] as string) ?? ""} placeholder={q.unit} onChange={(e) => setValues({ ...values, [q.id]: e.target.value })} />
@@ -322,7 +382,7 @@ export function QuestionsForm({ questions, busy, onSubmit }: { questions: Questi
   );
 }
 
-function FormulationView({ data, canApprove, busy, onApprove }: { data: { formulation: Formulation; strategy_plan: PlanningRequest["strategy_plan"]; assumptions: string[]; notes: string[] }; canApprove: boolean; busy: boolean; onApprove: (ok: boolean, c: string) => void }) {
+function FormulationView({ data, canApprove, busy, onApprove }: { data: { formulation: Formulation; strategy_plan: PlanningRequest["strategy_plan"]; assumptions: string[]; notes: string[]; validation?: FormulationValidation }; canApprove: boolean; busy: boolean; onApprove: (ok: boolean, c: string) => void }) {
   const [comment, setComment] = useState("");
   const f = data.formulation;
   return (
@@ -349,6 +409,14 @@ function FormulationView({ data, canApprove, busy, onApprove }: { data: { formul
         <div className="flex flex-wrap gap-2 text-xs">{f.decision_variables.map((v) => <span key={v.symbol} className="rounded border border-line px-2 py-1"><span className="font-mono">{v.symbol}</span> [{v.unit}] {v.meaning} · {v.count}</span>)}</div>
       </div>
       <div>
+        <div className="label">Objective</div>
+        <p className="text-sm">{f.objective}</p>
+      </div>
+      {data.validation && <FormulationChecks v={data.validation} />}
+      {data.validation && !data.validation.feasibility.feasible && (
+        <Notice tone="warn">The feasibility pre-check found no solution under these constraints{data.validation.feasibility.max_achievable_reserve_margin != null ? ` (highest achievable reserve margin: ${fmt.pct(data.validation.feasibility.max_achievable_reserve_margin)})` : ""}. Modify a constraint in the message box, or approve to record the infeasibility diagnosis.</Notice>
+      )}
+      <div>
         <div className="label">Assumptions requiring your approval</div>
         <ul className="list-disc space-y-1 pl-5 text-xs">{data.assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul>
       </div>
@@ -369,6 +437,34 @@ function FormulationView({ data, canApprove, busy, onApprove }: { data: { formul
 
 function ResultsTable({ rows, req }: { rows: Record<string, unknown>[]; req: PlanningRequest }) {
   const n = (v: unknown, d = 0) => fmt.num(v as number, d);
+  if (req.problem_type === "operational") {
+    return (
+      <div className="card mt-2 p-4 text-left">
+        <div className="label">Operating strategies (HiGHS MILP results, validated)</div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead><tr>
+              <th className="th">Strategy</th><th className="th text-right">Cost MUSD</th><th className="th text-right">Unserved GWh</th>
+              <th className="th text-right">Gas GWh</th><th className="th text-right">Imports GWh</th><th className="th text-right">Min reserve</th><th className="th text-right" title="Average gas units in service">Units</th>
+            </tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={String(r.key)}>
+                  <td className="td text-xs font-medium">{String(r.name)}{r.duplicate_of ? <div className="font-normal text-ink-soft">identical to {String(r.duplicate_of)}</div> : null}{r.status !== "optimal" ? <div><StatusBadge status={String(r.status)} /></div> : null}</td>
+                  <td className="td num whitespace-nowrap text-right text-xs">{n(r.operating_cost_musd, 1)}</td>
+                  <td className="td num whitespace-nowrap text-right text-xs">{n(r.unserved_gwh, 1)}</td>
+                  <td className="td num whitespace-nowrap text-right text-xs">{n(r.gas_gwh)}</td>
+                  <td className="td num whitespace-nowrap text-right text-xs">{n(r.imports_gwh)}</td>
+                  <td className="td num whitespace-nowrap text-right text-xs">{fmt.pct(r.min_reserve_margin as number)}</td>
+                  <td className="td num whitespace-nowrap text-right text-xs">{n(r.avg_units_in_service, 2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="card mt-2 p-4 text-left">
       <div className="label">Trade-off analysis (HiGHS results, validated)</div>

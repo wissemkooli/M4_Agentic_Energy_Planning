@@ -19,7 +19,7 @@ export default function ReviewQueue() {
                 <div><div className="font-semibold">{items[0].request_title}</div><div className="text-xs text-ink-soft">Requested by {items[0].requester_email}</div></div>
                 <div className="flex gap-2">
                   <Link className="btn-outline" to={`/agent/${rid}`}>Conversation</Link>
-                  <Link className="btn-outline" to={`/compare?runs=${items.filter((s) => s.run_id).map((s) => s.run_id).join(",")}`}>Compare alternatives</Link>
+                  {items[0].problem_type !== "operational" && <Link className="btn-outline" to={`/compare?runs=${items.filter((s) => s.run_id).map((s) => s.run_id).join(",")}`}>Compare alternatives</Link>}
                 </div>
               </div>
               <StrategyCards items={items} />

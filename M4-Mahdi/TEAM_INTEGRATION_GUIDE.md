@@ -12,10 +12,12 @@ imports, executes or modifies M1/M3 code.
 | Synthetic M1/M3 datasets (clearly labelled) for independent development | implemented |
 | Monthly merit-order simulation | implemented, tested |
 | Pyomo + HiGHS capacity-expansion LP; single, weighted-sum, ε-constraint, lexicographic, Pareto | implemented, tested |
+| Short-term operational MILP (integer gas units in service, outages, fuel limit, reserve, unserved energy) with 4 alternative operating strategies | implemented, tested |
 | Independent validation of solver results; infeasibility diagnosis | implemented, tested |
 | 5 predefined scenarios + custom scenarios (stored, reproducible) | implemented, tested |
 | Alternative strategy generation, roadmaps, trade-offs, risks | implemented, tested |
-| LangGraph planning agent with clarification, user approval, tool execution, grounded explanations | implemented, tested (deterministic mode and with a fake LLM; not tested against a live LLM provider) |
+| LangGraph agent (planning and operational problems) with clarification, formulation checks, user approval, tool execution, recommendation under stated priorities, grounded decision report, requester's preferred option | implemented, tested (deterministic mode and fake LLM in the automated suite; live OpenRouter free models in opt-in runs) |
+| OpenRouter integration: free model + fallbacks, reasoning control, daily call budget, token usage ledger | implemented, tested |
 | Authentication (Argon2, JWT + refresh rotation), roles USER/ADMIN, admin approval workflow with audit trail | implemented, tested |
 | FastAPI REST API + OpenAPI spec | implemented, tested |
 | SQLite persistence (PostgreSQL via `DATABASE_URL`) | SQLite tested; PostgreSQL not tested |

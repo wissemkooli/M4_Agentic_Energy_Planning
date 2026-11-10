@@ -14,9 +14,18 @@ export function RunsTable({ runs }: { runs: RunSummary[] }) {
               <td className="td"><Link className="font-medium hover:text-gold-dark" to={`/runs/${r.id}`}>{r.scenario_name}</Link><div className="text-[11px] text-ink-soft">{r.method}</div></td>
               <td className="td"><KindBadge kind={r.kind} /></td>
               <td className="td"><StatusBadge status={r.status} /></td>
-              <td className="td num text-right">{fmt.num(r.summary?.total_cost_npv_musd)}</td>
-              <td className="td num text-right">{fmt.num(r.summary?.total_emissions_mt, 1)}</td>
-              <td className="td num text-right">{fmt.pct(r.summary?.renewable_share_final_year)}</td>
+              {r.kind === "operational" ? (() => {
+                const o = r.summary as unknown as { operating_cost_musd?: number; emissions_mt?: number; renewable_share?: number } | null;
+                return (<>
+                  <td className="td num text-right" title="Operating cost over the period (not NPV)">{fmt.num(o?.operating_cost_musd, 1)}<span className="text-[10px] text-ink-soft"> op.</span></td>
+                  <td className="td num text-right">{fmt.num(o?.emissions_mt, 2)}</td>
+                  <td className="td num text-right">{fmt.pct(o?.renewable_share)}</td>
+                </>);
+              })() : (<>
+                <td className="td num text-right">{fmt.num(r.summary?.total_cost_npv_musd)}</td>
+                <td className="td num text-right">{fmt.num(r.summary?.total_emissions_mt, 1)}</td>
+                <td className="td num text-right">{fmt.pct(r.summary?.renewable_share_final_year)}</td>
+              </>)}
               <td className="td"><DataStatusBadge status={r.data_status} compact /></td>
               <td className="td text-xs text-ink-soft">{fmt.date(r.created_at)}</td>
             </tr>
@@ -31,7 +40,7 @@ export default function RunsList() {
   const { data, loading, error, reload } = useApi<RunSummary[]>("/api/optimization?limit=200");
   return (
     <>
-      <PageHeader eyebrow="Solver outputs" title="Optimization results" subtitle="Every simulation, optimization and Pareto analysis stored by the backend, with status and provenance." />
+      <PageHeader eyebrow="Solver outputs" title="Optimization results" subtitle="Every simulation, optimization (long-term LP and short-term operational MILP) and Pareto analysis stored by the backend, with status and provenance." />
       {loading ? <Loading /> : error ? <ErrorState message={error} onRetry={reload} /> :
         data!.length === 0 ? <Empty title="No results yet" action={<Link to="/scenarios" className="btn-primary">Open scenario builder</Link>}>Run a scenario or ask the planning agent.</Empty> : <RunsTable runs={data!} />}
     </>

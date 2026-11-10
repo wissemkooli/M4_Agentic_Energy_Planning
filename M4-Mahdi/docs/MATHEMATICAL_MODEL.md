@@ -176,3 +176,43 @@ energy balance is enforced from the first planning year. The gap is reported in 
 
 For 2025–2040: 64 investment, 768 generation and 192 import variables; about 1,200 constraints (plus policy constraints).
 Model build ≈ 0.3 s, HiGHS solve ≈ 0.2–0.6 s; a strategy set (5–8 solves) takes 3–8 s on a laptop.
+
+## 12. Short-term operational model (MILP, `m4/operations`)
+
+Used when the request is about operating the **existing** fleet over the next 1–24 months (no investment).
+
+**Sets:** months `p ∈ P` (from `start_month`), technologies `t ∈ T`, dispatchable technologies `D ⊂ T` (gas).
+
+**Parameters** (`m4/operations/inputs.py`; MOCK values in `system_parameters.yml`):
+`D[p]` monthly demand = M1 value of the chosen basis × (1 + losses) × (1 + demand change);
+`peak[p]` = D[p]·1000 / hours[p] × peak-to-average ratio (reserve basis may be a different M1 bound);
+unit size `S` = 250 MW; `N_avail[d,p]` = round(installed/S) − ⌈outage/S⌉ (outages rounded up, conservative);
+availability `a_d`; minimum stable fraction `μ` = 0.40; fixed cost per unit-month `c_fix` = 0.25 MUSD;
+value of lost load `VOLL` = 3,000 USD/MWh; operating reserve `r` = 10 %; import share limit; VRE share limit.
+
+**Variables:** `units[d,p] ∈ {0,…,N_avail[d,p]}` (integer), `gen[t,p] ≥ 0` (GWh), `imp[p] ≥ 0`, `uns[p] ≥ 0`.
+
+**Constraints:**
+- balance `Σ_t gen[t,p] + imp[p] + uns[p] = D[p]`
+- unit output `μ·units·S·a_d·h/1000 ≤ gen[d,p] ≤ units·S·a_d·h/1000` (units in service run at least at minimum
+  stable output on average — the integer decision creates a real trade-off between reserve and must-run output)
+- potential `gen[t,p] ≤ cap[t,p]·CF[t,month]·h/1000` for non-dispatchable technologies
+- VRE `gen[solar] + gen[wind] ≤ vre_max·D[p]`; imports `imp[p] ≤ import_max·D[p]`
+- reserve `Σ_d units·S·a_d + Σ_{t∉D} credit_t·cap[t,p] ≥ (1 + r)·peak[p]`
+- optional fuel limit `Σ_p gen[gas,p] ≤ G`; optional `uns = 0`
+
+**Objectives (linear):** operating cost `Σ vc·gen/1000 + c_imp·imp/1000 + c_fix·Σ units + VOLL·Σ uns/1000` (MUSD);
+unserved energy `Σ uns`; gas generation `Σ gen[gas]`; emissions `Σ ef·gen/1000`.
+
+**Strategies** (`m4/operations/strategies.py`): least-cost (single objective); reliability first (lexicographic
+unserved → cost, reserve sized on the M1 upper 80 % bound when achievable; indicators are re-measured on the base
+peak so strategies are comparable); minimum gas (lexicographic gas → cost with unserved ≤ least-cost unserved);
+balanced (ε-constraint: cost with gas ≤ midpoint, only when least-cost and minimum-gas differ by > 1 %).
+Identical decisions (< 0.5 unit, ≤ 1 GWh) are flagged as duplicates.
+
+**Validation** (`m4/operations/engine.py`): balance residual, output within units/potential, integrality,
+minimum stable output, units ≤ available, non-negativity, reserve/import/fuel constraint table, and objective values
+recomputed outside Pyomo. Infeasibility → elastic model with slacks on reserve (MW), fuel limit and unserved energy.
+`unit_commitment: false` solves the LP relaxation of the same model (used in tests: LP cost ≤ MILP cost).
+
+**Size:** for 3 months, 3 integer and ~21 continuous variables; HiGHS solves each MILP in < 0.05 s.

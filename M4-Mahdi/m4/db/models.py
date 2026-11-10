@@ -108,6 +108,9 @@ class Strategy(Base):
     duplicate_of: Mapped[str | None] = mapped_column(String(40), nullable=True)
     superseded_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     data_status: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
+    problem_type: Mapped[str] = mapped_column(String(16), default="planning")  # planning | operational
+    recommended: Mapped[bool] = mapped_column(Boolean, default=False)          # agent recommendation (stated priorities)
+    selected_by_requester: Mapped[bool] = mapped_column(Boolean, default=False)  # requester's preferred option
     report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     explanation: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
@@ -124,3 +127,21 @@ class StrategyDecision(Base):
     decision: Mapped[str] = mapped_column(String(32))  # approved | rejected | revision_requested | reference_superseded
     comment: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class LlmCall(Base):
+    """Ledger of LLM provider calls: token usage, latency, failures (no prompt content is stored)."""
+    __tablename__ = "llm_calls"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    purpose: Mapped[str] = mapped_column(String(40), default="chat")
+    model_requested: Mapped[str] = mapped_column(String(160), default="")
+    model_used: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="error")
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -1,4 +1,5 @@
 """API endpoints, authentication, role-based access control and the end-to-end admin workflow."""
+import os
 import time
 
 import jwt
@@ -247,3 +248,98 @@ def test_revision_request_creates_new_version(app_client, user_headers, admin_he
     old = app_client.get(f"/api/strategies/{sid}", headers=user_headers).json()
     assert old["status"] == "superseded" and old["superseded_by"] in {s["id"] for s in v2}
     assert [d["decision"] for d in old["decisions"]] == ["revision_requested"]  # audit record preserved
+
+
+def test_operational_request_selection_and_admin_decision(app_client, user_headers, admin_headers, other_headers):
+    ref_before = app_client.get("/api/strategies/reference", headers=user_headers).json()
+    r = app_client.post("/api/agent/requests", headers=user_headers, json={
+        "message": "Next month 500 MW of gas capacity is unavailable. Minimize operating cost and gas consumption."})
+    assert r.status_code == 201, r.text
+    req = r.json()
+    rid = req["id"]
+    assert req["problem_type"] == "operational" and req["status"] == "awaiting_approval"
+    assert req["understanding"]["problem_type"] == "operational"
+    assert req["formulation_validation"]["feasibility"]["feasible"]
+    assert req["llm_usage"]["calls"] == 0                         # deterministic mode in tests
+    r = app_client.post(f"/api/agent/requests/{rid}/approve", json={"approve": True}, headers=user_headers)
+    assert r.status_code == 200, r.text
+    req = r.json()
+    assert req["status"] == "pending_review"
+    rec = req["decision_report"]["recommendation"]
+    assert rec["strategy_id"] in req["strategy_ids"]
+    strategies = app_client.get(f"/api/strategies?request_id={rid}", headers=user_headers).json()
+    assert all(s["problem_type"] == "operational" for s in strategies)
+    assert [s["id"] for s in strategies if s["recommended"]] == [rec["strategy_id"]]
+    other = next(s for s in strategies if s["status"] == "pending_review" and not s["recommended"])
+    detail = app_client.get(f"/api/strategies/{other['id']}", headers=user_headers).json()
+    assert detail["report"]["kind"] == "operational" and detail["report"]["schedule"]
+    assert detail["run"]["kind"] == "operational" and detail["run"]["validation"]["status"] == "valid"
+    # the requester records a preferred option (different from the recommendation); others cannot
+    assert app_client.post(f"/api/agent/requests/{rid}/select", json={"strategy_id": other["id"]},
+                           headers=other_headers).status_code == 404
+    r = app_client.post(f"/api/agent/requests/{rid}/select", json={"strategy_id": other["id"], "comment": "Gas is scarce"},
+                        headers=user_headers)
+    assert r.status_code == 200, r.text
+    sel = r.json()["user_selection"]
+    assert sel["strategy_id"] == other["id"] and sel["follows_recommendation"] is False
+    assert r.json()["messages"][-1]["kind"] == "selection"
+    flags = {s["id"]: s["selected_by_requester"] for s in app_client.get(f"/api/strategies?request_id={rid}", headers=user_headers).json()}
+    assert flags[other["id"]] and sum(flags.values()) == 1
+    assert app_client.post(f"/api/agent/requests/{rid}/select", json={"strategy_id": "unknown"},
+                           headers=user_headers).status_code == 404
+    # admin accepts the operating plan: it does not replace the long-term planning reference
+    r = app_client.post(f"/api/admin/strategies/{other['id']}/approve", json={"comment": "ok"}, headers=admin_headers)
+    assert r.status_code == 200 and r.json()["status"] == "approved" and not r.json()["is_reference"]
+    assert app_client.get("/api/strategies/reference", headers=user_headers).json() == ref_before
+
+
+def test_operations_endpoint_and_agent_info(app_client, user_headers, admin_headers):
+    r = app_client.post("/api/operations/optimize", headers=user_headers,
+                        json={"name": "API operational run", "start_month": "2025-03", "months": 2})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["kind"] == "operational" and body["status"] == "optimal"
+    assert body["result"]["solver"]["problem_class"] == "MILP" and body["result"]["validation"]["status"] == "valid"
+    assert app_client.get(f"/api/optimization/{body['id']}", headers=user_headers).status_code == 200
+    bad = app_client.post("/api/operations/optimize", headers=user_headers, json={"name": "bad", "start_month": "2025-3"})
+    assert bad.status_code == 422
+    assert app_client.post("/api/operations/optimize", json={"name": "x", "start_month": "2025-03"}).status_code == 401
+    info = app_client.get("/api/agent/info", headers=user_headers).json()
+    assert "operational" in info["problem_types"] and "llm_usage_today" in info
+    assert "validate_formulation" in info["workflow_nodes"] and "build_decision_report" in info["workflow_nodes"]
+    assert "LLM_API_KEY" not in str(info) and "sk-or" not in str(info)
+    ov = app_client.get("/api/admin/overview", headers=admin_headers).json()
+    assert "llm_usage_today" in ov and ov["llm_usage_7_days"]["calls"] >= 0
+
+
+def test_llm_usage_ledger_and_column_migration(tmp_path):
+    import sqlalchemy as sa
+    from m4.db import session as sess
+    db = tmp_path / "old.db"
+    eng = sa.create_engine(f"sqlite:///{db.as_posix()}")
+    with eng.begin() as c:   # a 'strategies' table as created by the first release (without the new columns)
+        c.execute(sa.text("CREATE TABLE strategies (id VARCHAR(64) PRIMARY KEY, name VARCHAR(160))"))
+        c.execute(sa.text("INSERT INTO strategies (id, name) VALUES ('s1', 'old strategy')"))
+    sess._add_missing_columns(eng)
+    cols = {c["name"] for c in sa.inspect(eng).get_columns("strategies")}
+    assert {"problem_type", "recommended", "selected_by_requester"} <= cols
+    with eng.begin() as c:
+        assert c.execute(sa.text("SELECT problem_type, recommended FROM strategies")).one() == ("planning", 0)
+    sess._add_missing_columns(eng)   # idempotent
+    eng.dispose()
+
+
+def test_llm_calls_recorded_in_ledger(app_client, monkeypatch):
+    import httpx
+    from m4.agent.llm import LLMClient
+    from m4.agent.usage import calls_today, usage_summary
+    from m4.config import Settings
+    before = calls_today()
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: httpx.Response(200, json={
+        "model": "free-model", "choices": [{"message": {"content": "{}"}}], "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}}))
+    c = LLMClient(Settings(llm_api_key="k", llm_model="m", jwt_secret_key="x", database_url=os.environ["DATABASE_URL"]))
+    c.request_id = "req-1"
+    c.json_completion("s", "u", purpose="intent")
+    assert calls_today() == before + 1
+    u = usage_summary(1)
+    assert u["by_purpose"].get("intent", 0) >= 1 and "free-model" in u["models"] and u["total_tokens"] >= 10

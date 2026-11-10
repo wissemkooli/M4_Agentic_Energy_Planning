@@ -1,7 +1,8 @@
 import { Link, useParams } from "react-router-dom";
-import type { RunDetail, RunResult } from "../api/types";
+import type { OperationalHeadline, OperationalMonth, OperationalValidation, RunDetail, RunResult } from "../api/types";
 import { CapacityArea, ShareLines, StackedTechBars, annualToTech } from "../components/charts";
 import { useApi } from "../components/hooks";
+import { OperationalCharts, OperationalStats, OperationalValidationView } from "../components/operations";
 import { Card, Check, DataStatusBadge, ErrorState, KindBadge, Loading, Notice, PageHeader, Stat, StatusBadge, fmt } from "../components/ui";
 
 export function ConstraintTable({ result }: { result: RunResult }) {
@@ -76,18 +77,18 @@ export default function RunResults() {
   return (
     <>
       <PageHeader
-        eyebrow={data.kind === "simulation" ? "Simulation output" : data.kind === "pareto" ? "Pareto analysis" : "Optimization output"}
+        eyebrow={data.kind === "simulation" ? "Simulation output" : data.kind === "pareto" ? "Pareto analysis" : data.kind === "operational" ? "Operational optimization (MILP)" : "Optimization output"}
         title={data.scenario_name}
         subtitle={<>{r.message} · {fmt.date(data.created_at)} · {data.duration_seconds}s</>}
         actions={<><KindBadge kind={data.kind} /><StatusBadge status={data.status} />{r.validation && <StatusBadge status={r.validation.status} />}<DataStatusBadge status={data.data_status} /></>}
       />
       {data.data_status !== "REAL" && <div className="mb-4"><Notice tone="warn">Computed from MOCK inputs — illustrative results, not an investment recommendation.</Notice></div>}
 
-      {data.kind === "pareto" ? <ParetoView r={r} /> : !r.results ? (
+      {data.kind === "operational" && r.results ? <OperationalRun r={r} /> : data.kind === "pareto" ? <ParetoView r={r} /> : !r.results ? (
         <Card title="No solution reported">
           <p className="text-sm">{r.message}</p>
           {r.diagnostics && (
-            <ul className="mt-3 space-y-1 text-sm">{r.diagnostics.violations.map((v, i) => <li key={i}>• <b>{v.title}</b>{v.years.length ? ` (${v.years[0]}–${v.years[v.years.length - 1]})` : ""}: {fmt.num(v.total_shortfall, 1)} {v.unit}</li>)}</ul>
+            <ul className="mt-3 space-y-1 text-sm">{r.diagnostics.violations.map((v, i) => <li key={i}>• <b>{v.title}</b>{v.years?.length ? ` (${v.years[0]}–${v.years[v.years.length - 1]})` : ""}: {fmt.num(v.total_shortfall, 1)} {v.unit}</li>)}</ul>
           )}
           <p className="mt-3 text-xs text-ink-soft">The system never fabricates results when the solver does not return an optimal solution.</p>
         </Card>
@@ -122,6 +123,32 @@ export default function RunResults() {
         </div>
       )}
     </>
+  );
+}
+
+function OperationalRun({ r }: { r: RunResult }) {
+  const res = r.results as unknown as { summary: OperationalHeadline; monthly: OperationalMonth[] };
+  const extra = r as unknown as { solver: { name: string | null; problem_class?: string; mip_gap?: number | null; solves: { step: string; status: string; seconds: number }[] }; validation: OperationalValidation; problem: Record<string, unknown> };
+  return (
+    <div className="space-y-6">
+      <OperationalStats h={{ ...res.summary, kind: "operational" }} />
+      {r.objective_values && (
+        <Card title="Objective values" subtitle={`Method: ${r.method}${r.notes?.length ? " · " + r.notes.join(" · ") : ""}`}>
+          <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+            {Object.entries(r.objective_values).map(([k, v]) => <div key={k}><div className="text-xs text-ink-soft">{k}</div><div className="num font-medium">{fmt.num(v, 2)}</div></div>)}
+          </div>
+        </Card>
+      )}
+      <OperationalCharts monthly={res.monthly} />
+      <Card title="Validation & constraint satisfaction"><OperationalValidationView v={extra.validation} solver={extra.solver} /></Card>
+      <Card title="Problem parameters & provenance">
+        <div className="grid gap-6 lg:grid-cols-2">
+          <ul className="list-disc space-y-1 pl-5 text-xs">{r.assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul>
+          <table className="w-full"><tbody>{r.provenance.map((p) => <tr key={p.source}><td className="td text-xs">{p.source}</td><td className="td"><DataStatusBadge status={p.data_status} compact /></td><td className="td font-mono text-[11px]">{p.dataset_version}</td></tr>)}</tbody></table>
+        </div>
+        <details className="mt-4 text-xs"><summary className="cursor-pointer text-ink-soft">Full problem definition (JSON)</summary><pre className="mt-2 overflow-auto rounded bg-paper-soft p-3">{JSON.stringify(extra.problem, null, 2)}</pre></details>
+      </Card>
+    </div>
   );
 }
 

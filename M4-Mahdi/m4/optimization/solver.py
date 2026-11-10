@@ -56,7 +56,8 @@ def get_solver(name: str | None = None):
         "No HiGHS solver available. Install it with: pip install highspy  (see requirements.txt)")
 
 
-def solve(model: pyo.ConcreteModel, solver_name: str | None = None) -> SolveOutcome:
+def solve(model: pyo.ConcreteModel, solver_name: str | None = None, mip_gap: float | None = None) -> SolveOutcome:
+    """Solve an LP or MILP. `mip_gap` (relative) applies to models with integer variables."""
     t0 = time.perf_counter()
     try:
         name, solver = get_solver(solver_name)
@@ -65,6 +66,10 @@ def solve(model: pyo.ConcreteModel, solver_name: str | None = None) -> SolveOutc
     try:
         if name == "appsi_highs":
             solver.config.time_limit = get_settings().solver_time_limit_seconds
+            if mip_gap is not None:
+                solver.config.mip_gap = mip_gap
+        elif mip_gap is not None:
+            solver.options["mip_rel_gap"] = mip_gap
         res = solver.solve(model, load_solutions=False)
     except Exception as exc:  # solver crash or interface error
         return SolveOutcome("error", "exception", name, time.perf_counter() - t0, f"{type(exc).__name__}: {exc}")

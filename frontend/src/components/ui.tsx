@@ -100,7 +100,7 @@ export function StatusBadge({ status }: { status: string }) {
 }
 
 export function KindBadge({ kind }: { kind: string }) {
-  const label: Record<string, string> = { optimization: "Optimization output", simulation: "Simulated output", pareto: "Pareto analysis" };
+  const label: Record<string, string> = { optimization: "Optimization output", simulation: "Simulated output", pareto: "Pareto analysis", operational: "Operational (MILP)" };
   return <span className="rounded border border-line bg-white px-1.5 py-0.5 text-[11px] font-medium text-ink-soft">{label[kind] ?? kind}</span>;
 }
 

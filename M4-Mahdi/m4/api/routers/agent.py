@@ -8,11 +8,13 @@ from sqlalchemy.orm import Session
 from ...agent.graph import GRAPH_NODES
 from ...agent.llm import LLMClient
 from ...agent.tools import tool_catalog
+from ...agent.usage import usage_summary
+from ...operations.schema import OperationalProblem
 from ...auth.deps import can_access, get_current_user
 from ...db.models import OptimizationRun, PlanningRequest, Strategy, StrategyDecision, User
 from ...db.session import get_db
 from ... import services
-from ..schemas import AgentMessageRequest, AgentStartRequest, ApprovalRequest
+from ..schemas import AgentMessageRequest, AgentStartRequest, ApprovalRequest, SelectionRequest
 
 router = APIRouter(prefix="/api", tags=["agent & strategies"])
 
@@ -27,10 +29,18 @@ def _req(db: Session, user: User, request_id: str) -> PlanningRequest:
 @router.get("/agent/info")
 def agent_info(user: User = Depends(get_current_user)):
     c = LLMClient()
+    usage = usage_summary(1)
+    limit = c.s.llm_daily_call_limit
     return {"llm_configured": c.available, "llm_model": c.model if c.available else None,
-            "mode": "llm-assisted" if c.available else "deterministic (no LLM configured)",
+            "llm_fallback_models": c.fallback_models if c.available else [],
+            "mode": ("llm-assisted" if c.available else "deterministic (no LLM configured)")
+            + (" — daily LLM budget reached, deterministic fallback" if c.available and limit and usage["calls"] >= limit else ""),
+            "llm_usage_today": {**usage, "daily_call_limit": limit or None},
+            "problem_types": {"planning": "long-term capacity expansion (LP)",
+                              "operational": "short-term operation of the existing fleet (MILP, unit commitment)"},
             "workflow_nodes": GRAPH_NODES, "tools": tool_catalog(),
-            "human_gates": ["clarification answers", "formulation approval (user)", "strategy decision (administrator)"]}
+            "human_gates": ["clarification answers", "formulation approval (user)", "preferred option (user)",
+                            "strategy decision (administrator)"]}
 
 
 @router.post("/agent/requests", status_code=status.HTTP_201_CREATED)
@@ -74,6 +84,21 @@ def approve(request_id: str, body: ApprovalRequest, user: User = Depends(get_cur
     return services.request_dict(services.approve_formulation(db, user, req, body.approve, body.comment))
 
 
+@router.post("/agent/requests/{request_id}/select")
+def select_preferred(request_id: str, body: SelectionRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    req = _req(db, user, request_id)
+    if req.owner_id != user.id and user.role != "ADMIN":
+        raise HTTPException(403, "Only the requester can record a preferred option.")
+    return services.request_dict(services.select_strategy(db, user, req, body.strategy_id, body.comment))
+
+
+@router.post("/operations/optimize", status_code=status.HTTP_201_CREATED, tags=["operations"])
+def optimize_operations(body: OperationalProblem, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Solve one short-term operational problem (MILP) directly, without the agent."""
+    run = services.optimize_operations(db, user, body)
+    return {**services.run_summary(run), "result": run.result}
+
+
 @router.get("/strategies")
 def list_strategies(user: User = Depends(get_current_user), db: Session = Depends(get_db),
                     request_id: str | None = None, status_filter: str | None = Query(None, alias="status")):
@@ -105,7 +130,8 @@ def get_strategy(strategy_id: str, user: User = Depends(get_current_user), db: S
         d["run"] = {**services.run_summary(run), "validation": res.get("validation"), "solver": res.get("solver"),
                     "formulation": res.get("formulation"), "provenance": res.get("provenance"),
                     "objective_config": res.get("objective_config"), "notes": res.get("notes"),
-                    "annual": (res.get("results") or {}).get("annual")}
+                    "annual": (res.get("results") or {}).get("annual"),
+                    "monthly": (res.get("results") or {}).get("monthly")}
     d["decisions"] = [services.decision_dict(x, s) for x in db.scalars(
         select(StrategyDecision).where(StrategyDecision.strategy_id == s.id).order_by(StrategyDecision.created_at))]
     siblings = db.scalars(select(Strategy).where(Strategy.planning_request_id == s.planning_request_id,

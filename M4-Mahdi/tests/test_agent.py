@@ -171,3 +171,147 @@ def test_llm_explanation_rejected_when_ungrounded(fake_llm, bundle):
     assert e["source"] == "template" and "rejected" in e["llm_note"]
     t = template_explanation(strat)
     assert t["summary"].startswith(strat["name"])
+
+
+# ------------------------------------------------------------------ short-term operational problems
+def test_rule_parser_operational_request():
+    i = rule_parse("We expect electricity demand to increase next month. We have limited production capacity and want "
+                   "to minimize operational costs while satisfying demand.")
+    assert i.problem_type == "operational" and i.objectives == []
+    assert i.op_objectives == ["min_operating_cost", "min_unserved"]
+    assert i.period_months == 1 and i.period_relative == "next month"
+    assert i.demand_increase_mentioned and i.demand_change_pct is None        # no number invented
+    assert i.capacity_limit_mentioned_without_value and i.capacity_outages == []
+    j = rule_parse("For the next 3 months 800 MW of gas capacity is unavailable for maintenance and demand rises by 6%. "
+                   "Minimize operating cost and gas consumption.")
+    assert j.period_months == 3 and j.demand_change_pct == 6
+    assert j.capacity_outages[0].technology == "gas" and j.capacity_outages[0].unavailable_mw == 800
+    assert j.op_objectives == ["min_operating_cost", "min_gas"]
+    k = rule_parse("Plan operation in July 2025 to August 2025 with a 12% reserve margin and minimize cost.")
+    assert k.problem_type == "operational" and k.period_start == "2025-07" and k.period_months == 2
+    assert k.reserve_margin_pct == 12
+    # long-term requests stay planning problems
+    assert rule_parse("Reduce CO2 emissions by 2035 with a limited investment budget.").problem_type == "planning"
+
+
+def test_llm_operational_values_grounded(fake_llm):
+    llm = fake_llm(json_payloads=[{"problem_type": "operational", "op_objectives": ["min_operating_cost"],
+                                   "demand_change_pct": 12, "capacity_outages": [{"technology": "gas", "unavailable_mw": 900}]}])
+    intent, warnings = interpret("Next month demand rises; 500 MW of gas is unavailable; minimize operating cost.", llm)
+    assert intent.problem_type == "operational" and intent.period_months == 1
+    assert intent.demand_change_pct is None                       # 12 is not in the text
+    assert intent.capacity_outages[0].unavailable_mw == 500       # invented 900 discarded, rule value used
+    assert any("demand_change_pct" in w for w in warnings)
+
+
+def test_operational_workflow_end_to_end():
+    s = run_workflow(_state("We expect electricity demand to increase next month. We have limited production capacity "
+                            "and want to minimize operational costs while satisfying demand."))
+    assert s["status"] == "needs_clarification" and s["problem_type"] == "operational"
+    ids = {q["id"] for q in s["questions"]}
+    assert {"demand_scenario", "gas_unavailable_mw"} <= ids
+    q = next(x for x in s["questions"] if x["id"] == "demand_scenario")
+    assert "GWh" in q["options"][0]["label"]                      # computed from M1, not invented
+    assert s["understanding"]["problem_type"] == "operational"
+    called = [c["tool"] for c in s["investigation"]["tool_calls"]]
+    assert {"get_monthly_demand", "get_operational_fleet", "simulate_status_quo_operation"} <= set(called)
+    assert "estimate_unconstrained_investment" not in called
+    assert s["intent"]["period_start"] == "2025-01"               # anchored on M1 data, not the clock
+    assert any("first forecast month" in n for n in s["intent"]["notes"])
+
+    s.update(stage="message", user_message="", answers={"demand_scenario": "forecast", "gas_unavailable_mw": 500})
+    s = run_workflow(s)
+    assert s["status"] == "awaiting_approval", s.get("scenario_error")
+    v = s["formulation_validation"]
+    assert v["feasibility"]["feasible"] and {c["check"] for c in v["checks"]} >= {
+        "Decision variables defined with units", "Parameters traced to data sources", "Feasibility pre-check"}
+    assert s["formulation"]["problem_class"].startswith("Mixed-integer")
+    assert s["scenario"]["capacity_outages"] == [{"technology": "gas", "unavailable_mw": 500.0}]
+    assert s.get("strategy_result") is None                       # nothing optimized before approval
+
+    s["stage"] = "approved"
+    s = run_workflow(s)
+    assert s["status"] == "strategies_ready"
+    out = s["strategy_result"]
+    assert out["problem_type"] == "operational" and all(x["feasible"] for x in out["strategies"])
+    r = s["decision_report"]
+    assert r["recommendation"]["strategy_key"] == "least_cost_operations"   # first stated priority: cost
+    assert "final decision is yours" in r["recommendation"]["statement"]
+    assert r["narrative"]["source"] == "template" and "Data used" in r["narrative"]["text"]
+    assert r["computation"]["all_validated"]
+    nodes = [t["node"] for t in s["trace"]]
+    assert nodes.index("validate_formulation") < nodes.index("simulate_baseline") < nodes.index("build_decision_report")
+
+
+def test_operational_infeasibility_reported_before_approval():
+    s = run_workflow(_state("Next month 1500 MW of gas is unavailable because of an outage. Minimize operating cost."))
+    assert s["status"] == "awaiting_approval"
+    v = s["formulation_validation"]
+    assert not v["feasibility"]["feasible"] and v["status"] == "fail"
+    assert "max_achievable_reserve_margin" in v["feasibility"]
+    s["stage"] = "approved"
+    s = run_workflow(s)
+    assert s["status"] == "infeasible" and s["strategy_result"]["strategies"] == []
+
+
+def test_decision_report_with_llm_narrative_grounding(fake_llm):
+    s = run_workflow(_state("Minimize cost and reduce CO2 emissions until 2028, no budget limit"))
+    assert s["status"] == "awaiting_approval"
+    s["stage"] = "approved"
+    good = fake_llm(json_payloads=[{"narrative": "The optimizer compared several strategies and all passed validation. "
+                                                 "The final decision is yours; the data are MOCK."}])
+    out = run_workflow(dict(s), llm=good)
+    assert out["decision_report"]["narrative"]["source"].startswith("llm:fake-model")
+    assert out["decision_report"]["recommendation"]["strategy_key"] == "balanced"   # cost + emissions requested
+    assert out["llm_calls"] and out["llm_calls"][-1]["purpose"] == "decision_narrative"
+    bad = fake_llm(json_payloads=[{"narrative": "This plan costs 123,456,789 MUSD and is clearly the best option for everyone."}])
+    out2 = run_workflow(dict(s), llm=bad)
+    assert out2["decision_report"]["narrative"]["source"] == "template"
+    assert "rejected" in out2["decision_report"]["narrative"]["llm_note"]
+
+
+def test_llm_client_body_usage_and_daily_limit(monkeypatch):
+    sent = {}
+
+    def ok(url, json=None, headers=None, timeout=None):
+        sent.update(json)
+        return httpx.Response(200, json={"model": "m-fallback", "choices": [{"message": {"content": "{\"a\": 1}"}}],
+                                         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+    monkeypatch.setattr(httpx, "post", ok)
+    c = LLMClient(Settings(llm_api_key="k", llm_model="m", llm_fallback_models="m2, m3", llm_reasoning_effort="none",
+                           jwt_secret_key="x"), record_usage=False)
+    assert c.json_completion("s", "u", purpose="intent") == {"a": 1}
+    assert sent["models"] == ["m", "m2", "m3"] and sent["reasoning"] == {"enabled": False}
+    assert c.calls[0]["total_tokens"] == 15 and c.calls[0]["model_used"] == "m-fallback" and c.calls[0]["purpose"] == "intent"
+    # empty answer (reasoning consumed the budget) is an explicit error, not a silent success
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: httpx.Response(200, json={
+        "choices": [{"message": {"content": None}, "finish_reason": "length"}]}))
+    with pytest.raises(LLMError, match="empty answer"):
+        c.chat([{"role": "user", "content": "hi"}])
+    assert c.calls[-1]["status"] == "error"
+    # provider error returned with HTTP 200 (OpenRouter style)
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: httpx.Response(200, json={"error": {"message": "rate limited", "code": 429}}))
+    with pytest.raises(LLMError, match="429"):
+        c.chat([{"role": "user", "content": "hi"}])
+    # daily budget reached -> no HTTP call at all
+    import m4.agent.usage as usage
+    monkeypatch.setattr(usage, "calls_today", lambda: 5)
+    limited = LLMClient(Settings(llm_api_key="k", llm_model="m", llm_daily_call_limit=5, jwt_secret_key="x"))
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not be called")))
+    with pytest.raises(LLMError, match="Daily LLM call budget"):
+        limited.chat([{"role": "user", "content": "hi"}])
+
+
+def test_llm_client_retries_when_reasoning_is_mandatory(monkeypatch):
+    bodies = []
+
+    def post(url, json=None, headers=None, timeout=None):
+        bodies.append(dict(json))
+        if json["reasoning"] == {"enabled": False}:
+            return httpx.Response(400, json={"error": {"message": "Reasoning is mandatory for this endpoint and cannot be disabled."}})
+        return httpx.Response(200, json={"model": "r", "choices": [{"message": {"content": "ok"}}], "usage": {"total_tokens": 3}})
+    monkeypatch.setattr(httpx, "post", post)
+    c = LLMClient(Settings(llm_api_key="k", llm_model="m", llm_reasoning_effort="none", jwt_secret_key="x"), record_usage=False)
+    assert c.chat([{"role": "user", "content": "hi"}], purpose="intent")["content"] == "ok"
+    assert [b["reasoning"] for b in bodies] == [{"enabled": False}, {"effort": "low", "exclude": True}]
+    assert [x["status"] for x in c.calls] == ["error", "ok"] and c.calls[1]["purpose"] == "intent:retry_with_reasoning"

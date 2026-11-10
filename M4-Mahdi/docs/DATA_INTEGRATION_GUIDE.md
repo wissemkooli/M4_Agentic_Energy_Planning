@@ -16,7 +16,7 @@ actual file ──► adapter (load · validate · detect MOCK/REAL · normalize
 | `m1_demand_forecast` | `m1/m1_forecast_synthetic.csv` | MOCK | Synthetic monthly demand 2019–2040 in the M1 schema. 2019–2024: synthetic “actuals” + back-test forecasts. 2025–2040: trend × seasonality projection (2025 = original 12-month mock). **Not produced by XGBoost**; model label `SYNTHETIC_TREND_SEASONAL`. |
 | `m3_benchmark` | `m3/m3_benchmark_synthetic.csv` | MOCK | Synthetic benchmark in the M3 schema: Tunisia + 8 fictional comparators (“Comparator A–H”), 6 indicators, window 2015–2023. Statistics (mean, median, OLS trend, ranks, diff vs Tunisia, coverage) are computed from synthetic yearly series, so the file is internally consistent. **The Tunisia rows are synthetic too.** |
 | `reference_2024` | `reference_2024/reference_capacity_2024.csv` | MOCK | Original fictional 2024 system (4,350 MW installed, 17,850 GWh). |
-| `technology_assumptions` | `assumptions/*.csv`, `assumptions/system_parameters.yml` | MOCK | Costs, emission factors, capacity-factor profiles, lifetimes, build limits, retirements, system parameters. **Separate from M3 by design.** |
+| `technology_assumptions` | `assumptions/*.csv`, `assumptions/system_parameters.yml` | MOCK | Costs, emission factors, capacity-factor profiles, lifetimes, build limits, retirements, system parameters (including the operational parameters `thermal_unit_size_mw`, `thermal_min_stable_fraction`, `thermal_unit_monthly_fixed_cost_musd`, `operating_reserve_margin`, `value_of_lost_load_usd_per_mwh` used by short-term operational problems). **Separate from M3 by design.** |
 
 Regenerate the synthetic files (deterministic seed): `python scripts/generate_synthetic_data.py`.
 

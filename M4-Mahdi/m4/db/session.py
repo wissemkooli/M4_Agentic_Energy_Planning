@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -53,6 +53,7 @@ def init_db(seed_scenarios: bool = True) -> None:
     """Create tables (idempotent) and upsert the predefined scenarios."""
     engine = get_engine()
     Base.metadata.create_all(engine)
+    _add_missing_columns(engine)
     if seed_scenarios:
         from ..scenarios.predefined import predefined_scenarios
 
@@ -66,6 +67,31 @@ def init_db(seed_scenarios: bool = True) -> None:
                 else:
                     row.name, row.description, row.config, row.is_predefined = cfg.name, cfg.description, data, True
             db.commit()
+
+
+# Columns added after the first release. create_all() does not alter existing tables, so they are
+# added here (idempotent) to keep databases created by an earlier version working without data loss.
+ADDED_COLUMNS = {
+    "strategies": {
+        "problem_type": "VARCHAR(16) DEFAULT 'planning' NOT NULL",
+        "recommended": "BOOLEAN DEFAULT 0 NOT NULL",
+        "selected_by_requester": "BOOLEAN DEFAULT 0 NOT NULL",
+    },
+}
+
+
+def _add_missing_columns(engine) -> None:
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table, cols in ADDED_COLUMNS.items():
+            if not insp.has_table(table):
+                continue
+            present = {c["name"] for c in insp.get_columns(table)}
+            for name, ddl in cols.items():
+                if name not in present:
+                    if engine.dialect.name == "postgresql":
+                        ddl = ddl.replace("DEFAULT 0", "DEFAULT false")
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
 
 def predefined_ids(db: Session) -> list[str]:

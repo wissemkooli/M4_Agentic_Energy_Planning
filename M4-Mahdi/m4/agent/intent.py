@@ -15,6 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
+from ..operations.schema import OpObjective
 from ..scenarios.schema import DemandBasis, ObjectiveName
 from .llm import LLMClient, LLMError
 
@@ -28,6 +29,34 @@ OBJECTIVE_KEYWORDS: dict[str, list[str]] = {
 }
 VAGUE_BUDGET = r"(limited|tight|small|restricted|constrained|modest|low|reduced)\s+(investment\s+)?budget|budget (constraint|limit)|limited (investment|funds|funding|money)"
 NO_BUDGET = r"no budget (limit|constraint|cap)|unlimited budget|without (a )?budget (limit|constraint)|no (spending )?limit|^\s*(none|unlimited|no)\s*$"
+
+
+OP_OBJECTIVE_KEYWORDS: dict[str, list[str]] = {
+    "min_operating_cost": [r"\bcost", r"cheap", r"econom", r"expens", r"spend"],
+    "min_unserved": [r"satisf\w* (?:the )?demand", r"meet(?:ing)? (?:the )?demand", r"unserved", r"unmet", r"shortage",
+                     r"blackout", r"load shedding", r"reliab", r"security of supply", r"cover (?:the )?demand"],
+    "min_gas": [r"\bgas (?:use|consumption)", r"\bfuel", r"resource consumption", r"consum\w* less", r"save gas", r"less gas"],
+    "min_emissions": [r"co2", r"\bemission", r"carbon"],
+}
+OPERATIONAL_PATTERNS = [
+    r"next (?:month|quarter|summer|winter|season|\d+ months|(?:two|three|four|five|six|few|couple of) months)",
+    r"(?:coming|upcoming) (?:month|months|weeks|summer|winter)", r"this (?:month|summer|winter)", r"short[- ]term",
+    r"\boperational\b", r"operating cost", r"production capacity", r"\bdispatch", r"unit commitment",
+    r"units? (?:in service|online|available)", r"\boutage", r"maintenance", r"plants? (?:are )?(?:unavailable|offline|down)",
+    r"\boperat(?:e|es|ion|ions|ing)\b",
+    r"(?:in|for|during|from)\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+20\d\d",
+]
+WORD_NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+            "ten": 10, "eleven": 11, "twelve": 12, "couple of": 2, "few": 3}
+MONTHS = {m: i + 1 for i, m in enumerate(["january", "february", "march", "april", "may", "june", "july", "august",
+                                          "september", "october", "november", "december"])}
+TECH_WORDS = {"gas": "gas", "thermal": "gas", "ccgt": "gas", "solar": "solar", "pv": "solar", "wind": "wind", "hydro": "hydro"}
+
+
+class CapacityOutageSpec(BaseModel):
+    technology: str
+    unavailable_mw: float | None = None
+    reduction_pct: float | None = None
 
 
 class TargetSpec(BaseModel):
@@ -55,6 +84,18 @@ class PlanningIntent(BaseModel):
     efficiency_savings_pct: float | None = None
     notes: list[str] = Field(default_factory=list)
     parser: Literal["llm", "rules"] = "rules"
+    # --- short-term operational problems ---------------------------------------------
+    problem_type: Literal["planning", "operational"] = "planning"
+    op_objectives: list[OpObjective] = Field(default_factory=list)
+    period_start: str | None = None              # YYYY-MM
+    period_months: int | None = None
+    period_relative: str | None = None           # e.g. "next month" (resolved against the M1 data)
+    demand_change_pct: float | None = None
+    demand_increase_mentioned: bool = False
+    capacity_outages: list[CapacityOutageSpec] = Field(default_factory=list)
+    capacity_limit_mentioned_without_value: bool = False
+    gas_limit_gwh: float | None = None
+    gas_limit_mentioned_without_value: bool = False
 
 
 # ---------------------------------------------------------------------------------
@@ -175,7 +216,84 @@ def rule_parse(text: str) -> PlanningIntent:
                      (r"hydrogen", "Hydrogen is not modelled in this version.")):
         if re.search(kw, t):
             intent.notes.append(note)
+    _rule_parse_operational(t, intent)
     return intent
+
+
+def _rule_parse_operational(t: str, intent: PlanningIntent) -> None:
+    """Detect short-term operational problems (operate the existing fleet over a few months)."""
+    long_term = re.search(r"(?:by|until|horizon|through|to|in)\s+20(?:2[8-9]|[3-6]\d)\b", t) or re.search(
+        r"\b(?:invest|investment|build|new capacity|expansion|roadmap|long[- ]term|transition)", t)
+    if not any(re.search(p, t) for p in OPERATIONAL_PATTERNS) or long_term:
+        return
+    intent.problem_type = "operational"
+    intent.objectives, intent.primary_objective = [], None   # planning objectives do not apply
+    intent.end_year = intent.start_year = None
+    intent.budget_mentioned_without_value = False
+    # objectives (ordered by first mention)
+    hits = []
+    for obj, pats in OP_OBJECTIVE_KEYWORDS.items():
+        pos = [mm.start() for p in pats for mm in re.finditer(p, t)]
+        if pos:
+            hits.append((min(pos), obj))
+    intent.op_objectives = [o for _, o in sorted(hits)]
+    # period
+    m = re.search(r"next (\d+|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|couple of|few) months", t)
+    if m:
+        intent.period_months = int(m.group(1)) if m.group(1).isdigit() else WORD_NUM[m.group(1)]
+        intent.period_relative = f"next {intent.period_months} months"
+    elif re.search(r"next quarter", t):
+        intent.period_months, intent.period_relative = 3, "next quarter"
+    elif re.search(r"(?:next|coming|upcoming|this) month", t):
+        intent.period_months, intent.period_relative = 1, "next month"
+    mm = re.search(r"(?:in|for|during|from)\s+(" + "|".join(MONTHS) + r")\s+(20\d\d)", t)
+    if mm:
+        intent.period_start = f"{mm.group(2)}-{MONTHS[mm.group(1)]:02d}"
+        intent.period_relative = None
+        rng = re.search(r"(?:to|until|through|-)\s+(" + "|".join(MONTHS) + r")(?:\s+(20\d\d))?", t[mm.end(): mm.end() + 30])
+        if rng:
+            y2 = int(rng.group(2) or mm.group(2))
+            n = (y2 - int(mm.group(2))) * 12 + MONTHS[rng.group(1)] - MONTHS[mm.group(1)] + 1
+            if 1 <= n <= 24:
+                intent.period_months = n
+        intent.period_months = intent.period_months or 1
+    elif re.search(r"(?:next|coming|upcoming|this) summer", t):
+        intent.period_relative, intent.period_months = "next summer (June-August)", 3
+    elif re.search(r"(?:next|coming|upcoming|this) winter", t):
+        intent.period_relative, intent.period_months = "next winter (December-February)", 3
+    # demand change
+    d = re.search(r"demand[^.;%]{0,40}?(?:increas\w*|ris\w*|grow\w*|up|higher)\s*(?:by\s*)?" + _NUM + r"\s*(?:%|percent)", t) \
+        or re.search(_NUM + r"\s*(?:%|percent)\s*(?:higher|more|increase|rise)[^.;]{0,20}demand", t)
+    dd = re.search(r"demand[^.;%]{0,40}?(?:decreas\w*|fall\w*|drop\w*|lower)\s*(?:by\s*)?" + _NUM + r"\s*(?:%|percent)", t)
+    if d:
+        intent.demand_change_pct = _num(d.group(1))
+    elif dd:
+        intent.demand_change_pct = -_num(dd.group(1))
+    elif re.search(r"demand[^.;]{0,30}(?:increas|ris|grow|higher|peak)|(?:increas|ris|grow|higher)\w*[^.;]{0,20}demand", t):
+        intent.demand_increase_mentioned = True
+    # capacity outages
+    tech = r"(gas|thermal|ccgt|solar|pv|wind|hydro)"
+    found = False
+    for mo in re.finditer(_NUM + r"\s*mw\s*(?:of\s*)?(?:the\s*)?" + tech + r"[^.;]{0,40}?(?:unavailable|out of service|outage|maintenance|offline|down|lost)", t):
+        intent.capacity_outages.append(CapacityOutageSpec(technology=TECH_WORDS[mo.group(2)], unavailable_mw=_num(mo.group(1))))
+        found = True
+    for mo in re.finditer(tech + r"[^.;]{0,40}?(?:unavailable|out of service|outage|maintenance|offline|down|lost)[^.;]{0,20}?" + _NUM + r"\s*mw", t):
+        if not any(o.technology == TECH_WORDS[mo.group(1)] for o in intent.capacity_outages):
+            intent.capacity_outages.append(CapacityOutageSpec(technology=TECH_WORDS[mo.group(1)], unavailable_mw=_num(mo.group(2))))
+            found = True
+    for mo in re.finditer(tech + r"\s*capacity[^.;]{0,25}?(?:reduced|down|lower|cut|decreas\w*)\s*(?:by\s*)?" + _NUM + r"\s*(?:%|percent)", t):
+        intent.capacity_outages.append(CapacityOutageSpec(technology=TECH_WORDS[mo.group(1)], reduction_pct=_num(mo.group(2))))
+        found = True
+    if not found and re.search(r"(?:limited|reduced|constrained|insufficient|tight)\s+(?:production |generation |generating )?capacity|capacity (?:is )?(?:limited|constrained|insufficient)", t):
+        intent.capacity_limit_mentioned_without_value = True
+    # gas fuel availability
+    g = re.search(r"(?:gas|fuel)[^.;]{0,40}?(?:limit\w*|available|supply|at most|maximum|max)[^.;]{0,15}?" + _NUM + r"\s*gwh", t)
+    if g:
+        intent.gas_limit_gwh = _num(g.group(1))
+    elif re.search(r"(?:limited|restricted|constrained|reduced) (?:natural )?(?:gas|fuel) (?:supply|availability|deliveries)|(?:gas|fuel) (?:supply|availability) (?:is )?(?:limited|restricted|constrained)", t):
+        intent.gas_limit_mentioned_without_value = True
+    if re.search(r"reliab|security of supply|reserve|blackout", t):
+        intent.reliability_mentioned = True
 
 
 def parse_money_any(text: str) -> float | None:
@@ -197,7 +315,14 @@ budget_unlimited_confirmed (true only if the user explicitly says there is no bu
 renewable_targets, emission_reduction_targets (% reduction vs 2024), gas_share_limits (% max share)
   — each a list of {"year": int|null, "value": number},
 reserve_margin_pct, reliability_mentioned, max_import_share_pct,
-demand_case (forecast | upper_80 | lower_80 | upper_95 | lower_95 | null), efficiency_savings_pct, notes (list of strings).
+demand_case (forecast | upper_80 | lower_80 | upper_95 | lower_95 | null), efficiency_savings_pct, notes (list of strings),
+problem_type: "operational" for short-term operation of the EXISTING fleet over a few months (dispatch, units in service,
+  outages, operating cost, next month...), otherwise "planning" (long-term investment, targets by a future year),
+op_objectives (operational only; list of: min_operating_cost, min_unserved (satisfy demand / reliability),
+  min_gas (fuel / resource consumption), min_emissions; ordered by importance),
+demand_change_pct (stated % change of demand, negative for a decrease), demand_increase_mentioned (true if an increase is
+mentioned without a number), capacity_outages (list of {"technology": gas|solar|wind|hydro, "unavailable_mw": number|null,
+"reduction_pct": number|null}), capacity_limit_mentioned_without_value, gas_limit_gwh, gas_limit_mentioned_without_value.
 Rules: NEVER invent numbers. Use null when a value is not stated explicitly. Do not compute anything."""
 
 
@@ -213,10 +338,17 @@ def _numbers_in(text: str) -> set[float]:
 
 def llm_parse(text: str, client: LLMClient) -> tuple[PlanningIntent, list[str]]:
     """Returns (intent, warnings). Raises LLMError if the LLM is unavailable or unusable."""
-    data = client.json_completion(LLM_SYSTEM, text)
+    data = client.json_completion(LLM_SYSTEM, text, purpose="intent")
     data["parser"] = "llm"
-    data = {k: v for k, v in data.items() if k in PlanningIntent.model_fields}
-    for k in ("renewable_targets", "emission_reduction_targets", "gas_share_limits", "objectives", "notes"):
+    data = {k: v for k, v in data.items() if k in PlanningIntent.model_fields and v is not None
+            or k in ("budget_total_musd", "annual_budget_musd")}
+    for k in ("budget_mentioned_without_value", "budget_unlimited_confirmed", "reliability_mentioned",
+              "demand_increase_mentioned", "capacity_limit_mentioned_without_value", "gas_limit_mentioned_without_value"):
+        data[k] = bool(data.get(k) or False)
+    if data.get("problem_type") not in ("planning", "operational"):
+        data.pop("problem_type", None)
+    for k in ("renewable_targets", "emission_reduction_targets", "gas_share_limits", "objectives", "notes",
+              "op_objectives", "capacity_outages"):
         if data.get(k) is None:
             data[k] = []
     try:
@@ -245,6 +377,32 @@ def llm_parse(text: str, client: LLMClient) -> tuple[PlanningIntent, list[str]]:
         if v is not None and float(v) not in present:
             warnings.append(f"Discarded LLM value {f}={v}: not stated in the request.")
             setattr(intent, f, None)
+    for f in ("demand_change_pct", "gas_limit_gwh"):
+        v = getattr(intent, f)
+        if v is not None and not grounded(abs(v)):
+            warnings.append(f"Discarded LLM value {f}={v}: not stated in the request.")
+            setattr(intent, f, None)
+    kept = []
+    for o in intent.capacity_outages:
+        vals = [x for x in (o.unavailable_mw, o.reduction_pct) if x is not None]
+        if o.technology in TECH_WORDS.values() and vals and all(grounded(x) for x in vals):
+            kept.append(o)
+        else:
+            warnings.append(f"Discarded LLM capacity outage {o.model_dump()}: value or technology not stated in the request.")
+    intent.capacity_outages = kept
+    # the operating period is resolved deterministically (relative expressions such as "next month")
+    rules = rule_parse(text)
+    if intent.problem_type == "operational" or rules.problem_type == "operational":
+        intent.problem_type = "operational"
+        intent.objectives, intent.primary_objective = [], None
+        intent.period_start, intent.period_months, intent.period_relative = \
+            rules.period_start, rules.period_months, rules.period_relative
+        if not intent.op_objectives:
+            intent.op_objectives = rules.op_objectives
+        if not intent.capacity_outages and rules.capacity_outages:
+            intent.capacity_outages = rules.capacity_outages
+        intent.capacity_limit_mentioned_without_value = intent.capacity_limit_mentioned_without_value and not intent.capacity_outages
+        intent.budget_mentioned_without_value = False
     if intent.objectives and not intent.primary_objective:
         intent.primary_objective = intent.objectives[0]
     return intent, warnings
@@ -288,4 +446,29 @@ def merge_intents(old: PlanningIntent | None, new: PlanningIntent) -> PlanningIn
     merged.reliability_mentioned = merged.reliability_mentioned or new.reliability_mentioned
     merged.notes = list(dict.fromkeys(merged.notes + new.notes))
     merged.parser = new.parser
+    # operational fields
+    if new.problem_type == "operational" and old.problem_type != "operational":
+        merged.problem_type = "operational"
+        merged.objectives, merged.primary_objective = [], None
+    for f in ("period_start", "period_months", "period_relative", "demand_change_pct", "gas_limit_gwh"):
+        v = getattr(new, f)
+        if v is not None:
+            setattr(merged, f, v)
+    if new.op_objectives:
+        merged.op_objectives = list(dict.fromkeys(new.op_objectives + [o for o in merged.op_objectives if o not in new.op_objectives]))
+    if new.capacity_outages:
+        by = {o.technology: o for o in merged.capacity_outages}
+        by.update({o.technology: o for o in new.capacity_outages})
+        merged.capacity_outages = list(by.values())
+        merged.capacity_limit_mentioned_without_value = False
+    if new.demand_change_pct is not None:
+        merged.demand_increase_mentioned = False
+    if new.gas_limit_gwh is not None:
+        merged.gas_limit_mentioned_without_value = False
+    merged.demand_increase_mentioned = merged.demand_increase_mentioned or (
+        new.demand_increase_mentioned and merged.demand_change_pct is None)
+    merged.capacity_limit_mentioned_without_value = merged.capacity_limit_mentioned_without_value or (
+        new.capacity_limit_mentioned_without_value and not merged.capacity_outages)
+    merged.gas_limit_mentioned_without_value = merged.gas_limit_mentioned_without_value or (
+        new.gas_limit_mentioned_without_value and merged.gas_limit_gwh is None)
     return merged

@@ -77,15 +77,17 @@ class FakeLLM:
         self.tool_calls = tool_calls
         self.fail = fail
         self.model = "fake-model"
-        self.calls = 0
+        self.calls = []
+        self.request_id = None
 
     @property
     def available(self):
         return True
 
-    def chat(self, messages, tools=None, json_mode=False, max_tokens=1200):
+    def chat(self, messages, tools=None, json_mode=False, max_tokens=None, purpose="chat"):
         from m4.agent.llm import LLMError
-        self.calls += 1
+        self.calls.append({"purpose": purpose, "model_used": "fake-model", "status": "error" if self.fail else "ok",
+                           "total_tokens": 0, "seconds": 0.0})
         if self.fail:
             raise LLMError("LLM provider returned HTTP 503: service unavailable")
         if tools is not None:
@@ -93,9 +95,9 @@ class FakeLLM:
         import json
         return {"content": json.dumps(self.json_payloads.pop(0) if self.json_payloads else {})}
 
-    def json_completion(self, system, user, max_tokens=1200):
+    def json_completion(self, system, user, max_tokens=None, purpose="json"):
         from m4.agent.llm import parse_json
-        return parse_json(self.chat([{"role": "user", "content": user}], json_mode=True)["content"])
+        return parse_json(self.chat([{"role": "user", "content": user}], json_mode=True, purpose=purpose)["content"])
 
 
 @pytest.fixture()

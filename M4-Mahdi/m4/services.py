@@ -12,11 +12,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .agent.graph import run_workflow
-from .agent.llm import LLMClient
+from .agent.llm import LLMClient, usage_totals
 from .data_integration.repository import get_inputs
 from .db.models import OptimizationRun, PlanningRequest, Scenario, Strategy, StrategyDecision, User
 from .modeling.simulation import simulate
 from .modeling.system import build_system_inputs
+from .operations.engine import run_operational
+from .operations.inputs import build_operational_inputs
+from .operations.schema import OperationalProblem
 from .optimization.engine import pareto_frontier, run_optimization
 from .scenarios.schema import ObjectiveConfig, ScenarioConfig
 
@@ -117,13 +120,23 @@ def pareto(db: Session, user: User, cfg: ScenarioConfig, scenario_id: str | None
     return save_run(db, user, res, "pareto", scenario_id, cfg.name, time.perf_counter() - t0)
 
 
+def optimize_operations(db: Session, user: User, problem: OperationalProblem) -> OptimizationRun:
+    t0 = time.perf_counter()
+    result = run_operational(build_operational_inputs(get_inputs(), problem))
+    return save_run(db, user, result, "operational", None, problem.name, time.perf_counter() - t0)
+
+
 def compare_runs(runs: list[OptimizationRun]) -> dict:
     rows = []
     for r in runs:
         row = {"run_id": r.id, "scenario_name": r.scenario_name, "kind": r.kind, "status": r.status,
                "feasible": r.feasible, "data_status": r.data_status, "method": r.method}
         res = (r.result or {}).get("results")
-        if res:
+        if res and r.kind == "operational":
+            row["problem_type"] = "operational"
+            row.update({k: res["summary"].get(k) for k in ("operating_cost_musd", "unserved_gwh", "gas_gwh", "imports_gwh",
+                                                            "emissions_mt", "min_reserve_margin", "renewable_share")})
+        elif res:
             s = res["summary"]
             row.update({k: s.get(k) for k in ("total_cost_npv_musd", "total_investment_musd", "total_emissions_mt",
                                                "final_year_emissions_mt", "renewable_share_final_year",
@@ -148,7 +161,12 @@ def request_dict(r: PlanningRequest, full: bool = True) -> dict:
     if full:
         d.update({k: st.get(k) for k in ("messages", "trace", "intent", "questions", "investigation", "scenario",
                                          "formulation", "strategy_plan", "assumptions_to_approve", "tradeoffs",
-                                         "warnings", "baseline_simulation", "llm", "approval", "admin_feedback")})
+                                         "warnings", "baseline_simulation", "llm", "approval", "admin_feedback",
+                                         "understanding", "formulation_validation", "decision_report", "user_selection")})
+        d["problem_type"] = st.get("problem_type", "planning")
+        d["llm_usage"] = usage_totals(st.get("llm_calls", []))
+        d["llm_calls"] = [{k: c.get(k) for k in ("purpose", "model_used", "status", "total_tokens", "seconds", "error")}
+                          for c in st.get("llm_calls", [])][-20:]
         if d.get("investigation"):
             inv = dict(d["investigation"])
             inv.pop("results", None)  # raw tool payloads available through /investigation endpoint
@@ -163,7 +181,14 @@ def _persistable(state: dict) -> dict:
 
 def _llm_info() -> dict:
     c = LLMClient()
-    return {"configured": c.available, "model": c.model if c.available else None}
+    return {"configured": c.available, "model": c.model if c.available else None,
+            "fallback_models": c.fallback_models if c.available else []}
+
+
+def _run(state: dict, req: PlanningRequest) -> dict:
+    client = LLMClient()
+    client.request_id = req.id
+    return run_workflow(state, llm=client)
 
 
 def start_request(db: Session, user: User, message: str, title: str | None = None) -> PlanningRequest:
@@ -186,7 +211,7 @@ def post_message(db: Session, user: User, req: PlanningRequest, message: str | N
                                                  "data": {"answers": answers} if answers else None,
                                                  "at": datetime.now(timezone.utc).isoformat()})
     state.update({"stage": "message", "user_message": message or "", "answers": answers or {}, "llm": _llm_info()})
-    out = run_workflow(state)
+    out = _run(state, req)
     req.state = _persistable(out)
     req.status = out.get("status", req.status)
     db.commit()
@@ -212,14 +237,17 @@ def approve_formulation(db: Session, user: User, req: PlanningRequest, approve: 
     db.commit()
     state.update({"stage": "approved", "llm": _llm_info()})
     try:
-        out = run_workflow(state)
+        out = _run(state, req)
     except Exception:
         req.status = "awaiting_approval"
         db.commit()
         raise
     result = out.get("strategy_result") or {}
-    ids = _store_strategies(db, req, result)
+    rec = (out.get("decision_report") or {}).get("recommendation")
+    ids = _store_strategies(db, req, result, rec["strategy_key"] if rec else None)
     out["strategy_ids"] = ids
+    if rec:
+        rec["strategy_id"] = next((sid for sid, s in zip(ids, result.get("strategies", [])) if s["key"] == rec["strategy_key"]), None)
     req.state = _persistable(out)
     req.status = "pending_review" if out.get("status") == "strategies_ready" else out.get("status", "infeasible")
     req.state["status"] = req.status
@@ -228,17 +256,19 @@ def approve_formulation(db: Session, user: User, req: PlanningRequest, approve: 
     return req
 
 
-def _store_strategies(db: Session, req: PlanningRequest, result: dict) -> list[str]:
+def _store_strategies(db: Session, req: PlanningRequest, result: dict, recommended_key: str | None = None) -> list[str]:
     owner = db.get(User, req.owner_id)
     ids = []
     previous = {s.key: s for s in db.scalars(select(Strategy).where(Strategy.planning_request_id == req.id)
                                              .order_by(Strategy.version))}
     if result.get("status") != "ok" and result.get("base_run"):
-        save_run(db, owner, result["base_run"], "optimization", None, "Planning request (infeasible)",
-                 0.0, planning_request_id=req.id)
+        op = result.get("problem_type") == "operational"
+        save_run(db, owner, result["base_run"], "operational" if op else "optimization", None,
+                 ("Operational request" if op else "Planning request") + " (infeasible)", 0.0, planning_request_id=req.id)
     for s in result.get("strategies", []):
         run = s["run"]
-        run_row = save_run(db, owner, run, "optimization", None, f"{s['name']} — {req.title[:60]}",
+        op = result.get("problem_type") == "operational"
+        run_row = save_run(db, owner, run, "operational" if op else "optimization", None, f"{s['name']} — {req.title[:60]}",
                            sum(x.get("seconds", 0) for x in (run.get("solver") or {}).get("solves", [])),
                            planning_request_id=req.id) if run.get("status") != "untested" else None
         prev = previous.get(s["key"])
@@ -249,7 +279,8 @@ def _store_strategies(db: Session, req: PlanningRequest, result: dict) -> list[s
                        version=(prev.version + 1) if prev else 1, parent_strategy_id=prev.id if prev else None,
                        status=status, feasible=s["feasible"], duplicate_of=s["duplicate_of"],
                        data_status=run.get("data_status", "UNKNOWN"), report=s.get("report"),
-                       explanation=s.get("explanation"))
+                       explanation=s.get("explanation"), problem_type="operational" if op else "planning",
+                       recommended=(s["key"] == recommended_key and status == "pending_review"))
         db.add(row)
         db.flush()
         if prev and prev.status in ("pending_review", "revision_requested", "duplicate"):
@@ -259,6 +290,32 @@ def _store_strategies(db: Session, req: PlanningRequest, result: dict) -> list[s
     return ids
 
 
+def select_strategy(db: Session, user: User, req: PlanningRequest, strategy_id: str, comment: str = "") -> PlanningRequest:
+    """The requester records the option they prefer (human decision support); the administrator still decides."""
+    s = db.get(Strategy, strategy_id)
+    if s is None or s.planning_request_id != req.id:
+        raise ServiceError("Strategy not found in this planning request.", 404)
+    if not s.feasible or s.duplicate_of or s.status not in ("pending_review", "approved"):
+        raise ServiceError(f"Strategy is '{s.status}' and cannot be selected.", 409)
+    for other in db.scalars(select(Strategy).where(Strategy.planning_request_id == req.id)):
+        other.selected_by_requester = other.id == s.id
+    st = copy.deepcopy(req.state or {})
+    rec = (st.get("decision_report") or {}).get("recommendation") or {}
+    sel = {"strategy_id": s.id, "strategy_key": s.key, "strategy_name": s.name, "by": user.email, "comment": comment,
+           "follows_recommendation": rec.get("strategy_key") == s.key, "at": datetime.now(timezone.utc).isoformat()}
+    st["user_selection"] = sel
+    st.setdefault("messages", []).append({
+        "role": "user" if user.id == req.owner_id else "admin", "kind": "selection", "data": sel, "at": sel["at"],
+        "content": f"Preferred option: {s.name} (v{s.version})." + (" This follows the agent's recommendation."
+                                                                   if sel["follows_recommendation"] else
+                                                                   " This differs from the agent's recommendation.")
+        + (f" {comment}" if comment else "") + " The administrator makes the final decision."})
+    req.state = st
+    db.commit()
+    db.refresh(req)
+    return req
+
+
 # ================================================================= strategies & admin
 def strategy_dict(s: Strategy, full: bool = False) -> dict:
     d = {"id": s.id, "planning_request_id": s.planning_request_id, "owner_id": s.owner_id, "run_id": s.run_id,
@@ -266,6 +323,8 @@ def strategy_dict(s: Strategy, full: bool = False) -> dict:
          "parent_strategy_id": s.parent_strategy_id, "status": s.status, "is_reference": s.is_reference,
          "feasible": s.feasible, "duplicate_of": s.duplicate_of, "superseded_by": s.superseded_by,
          "data_status": s.data_status, "created_at": _iso(s.created_at),
+         "problem_type": s.problem_type or "planning", "recommended": bool(s.recommended),
+         "selected_by_requester": bool(s.selected_by_requester),
          "headline": (s.report or {}).get("headline")}
     if full:
         d.update({"report": s.report, "explanation": s.explanation})
@@ -295,11 +354,13 @@ def decide(db: Session, admin: User, strategy: Strategy, decision: str, comment:
         raise ServiceError("Only feasible, validated strategies can be reviewed.", 409)
     req = db.get(PlanningRequest, strategy.planning_request_id)
     if decision == "approved":
-        for old in db.scalars(select(Strategy).where(Strategy.is_reference.is_(True))):
-            old.is_reference = False
-            _record(db, old, admin, "reference_superseded", f"Planning reference replaced by strategy {strategy.id} "
-                                                            f"({strategy.name} v{strategy.version}).")
-        strategy.status, strategy.is_reference = "approved", True
+        operational = (strategy.problem_type or "planning") == "operational"
+        if not operational:  # one long-term planning reference at a time; operating plans do not replace it
+            for old in db.scalars(select(Strategy).where(Strategy.is_reference.is_(True))):
+                old.is_reference = False
+                _record(db, old, admin, "reference_superseded", f"Planning reference replaced by strategy {strategy.id} "
+                                                                f"({strategy.name} v{strategy.version}).")
+        strategy.status, strategy.is_reference = "approved", not operational
         _record(db, strategy, admin, "approved", comment)
         if req:
             req.status = "approved"
@@ -307,7 +368,9 @@ def decide(db: Session, admin: User, strategy: Strategy, decision: str, comment:
             st["status"] = "approved"
             st.setdefault("messages", []).append({"role": "admin", "kind": "decision", "at": datetime.now(timezone.utc).isoformat(),
                                                   "content": f"Administrator approved '{strategy.name}' (v{strategy.version}) "
-                                                             f"as the planning reference." + (f" Comment: {comment}" if comment else ""),
+                                                             + ("as the operating plan (decision support only; nothing is executed "
+                                                                "automatically)." if operational else "as the planning reference.")
+                                                             + (f" Comment: {comment}" if comment else ""),
                                                   "data": None})
             req.state = st
     elif decision == "rejected":
